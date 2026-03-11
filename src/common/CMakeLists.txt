@@ -2,6 +2,7 @@
 add_library(seeddb_common STATIC
     error.cpp
     logger.cpp
+    config.cpp
 )
 
 target_include_directories(seeddb_common

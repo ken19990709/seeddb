@@ -19,4 +19,5 @@ target_sources(seeddb_tests
         unit/common/test_types.cpp
         unit/common/test_error.cpp
         unit/common/test_logger.cpp
+        unit/common/test_config.cpp
 )
