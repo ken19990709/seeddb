@@ -17,4 +17,5 @@ target_sources(seeddb_tests
     PRIVATE
         unit/common/test_placeholder.cpp
         unit/common/test_types.cpp
+        unit/common/test_error.cpp
 )

@@ -1,7 +1,9 @@
-# Common utilities library (header-only for now)
-add_library(seeddb_common INTERFACE)
+# Common utilities library
+add_library(seeddb_common STATIC
+    error.cpp
+)
 
 target_include_directories(seeddb_common
-    INTERFACE
+    PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
