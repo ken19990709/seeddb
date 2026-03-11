@@ -39,6 +39,9 @@ enable_testing()
 # Include CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Fetch Catch2 testing framework
+include(Catch2)
+
 # Print configuration summary
 message(STATUS "")
 message(STATUS "SeedDB Configuration Summary")
