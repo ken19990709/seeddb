@@ -54,8 +54,8 @@ TEST_CASE("Result<void> works for void returns", "[error]") {
         seeddb::ErrorCode::IO_ERROR, "disk full"
     );
 
-    REQUIRE(ok_result.ok() == true);
-    REQUIRE(err_result.ok() == false);
+    REQUIRE(ok_result.is_ok() == true);
+    REQUIRE(err_result.is_ok() == false);
 }
 
 TEST_CASE("error_code_name returns correct names", "[error]") {

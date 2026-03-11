@@ -29,18 +29,18 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Add subdirectories
-add_subdirectory(src)
-add_subdirectory(tests)
-
 # Enable testing
 enable_testing()
 
 # Include CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# Fetch Catch2 testing framework
+# Fetch Catch2 testing framework (must be done before adding tests subdirectory)
 include(Catch2)
+
+# Add subdirectories (src first, then tests which depends on Catch2)
+add_subdirectory(src)
+add_subdirectory(tests)
 
 # Print configuration summary
 message(STATUS "")

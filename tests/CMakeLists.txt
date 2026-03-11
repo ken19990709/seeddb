@@ -4,7 +4,7 @@ add_executable(seeddb_tests)
 # Link with Catch2 and common library
 target_link_libraries(seeddb_tests
     PRIVATE
-        Catch2::catch2_with_main
+        Catch2::Catch2WithMain
         seeddb_common
 )
 

@@ -108,8 +108,13 @@ public:
     }
 
     /// Check if result is successful
-    bool ok() const noexcept {
+    bool is_ok() const noexcept {
         return !error_.has_value() || error_->code() == ErrorCode::SUCCESS;
+    }
+
+    /// Check if result is successful (alias for is_ok)
+    bool ok() const noexcept {
+        return is_ok();
     }
 
     /// Get the value (undefined behavior if not ok())
@@ -152,7 +157,9 @@ public:
         return Result(std::move(error));
     }
 
-    bool ok() const noexcept {
+    /// Check if result is successful
+    /// Note: Use is_ok() instead of ok() to avoid conflict with static factory
+    bool is_ok() const noexcept {
         return !error_.has_value() || error_->code() == ErrorCode::SUCCESS;
     }
 
