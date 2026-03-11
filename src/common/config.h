@@ -43,7 +43,6 @@ public:
 
 private:
     void set_defaults();
-    std::string trim(const std::string& str) const;
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::string> values_;

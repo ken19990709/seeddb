@@ -1,7 +1,6 @@
 #include "common/config.h"
+#include "common/string_utils.h"
 #include <fstream>
-#include <algorithm>
-#include <cctype>
 
 namespace seeddb {
 
@@ -36,7 +35,7 @@ bool Config::load(const std::string& path) {
         }
 
         // Trim whitespace
-        line = trim(line);
+        line = utils::trim(line);
 
         // Skip empty lines
         if (line.empty()) {
@@ -49,8 +48,8 @@ bool Config::load(const std::string& path) {
             continue;  // Skip malformed lines
         }
 
-        std::string key = trim(line.substr(0, eq_pos));
-        std::string value = trim(line.substr(eq_pos + 1));
+        std::string key = utils::trim(line.substr(0, eq_pos));
+        std::string value = utils::trim(line.substr(eq_pos + 1));
 
         if (!key.empty()) {
             values_[key] = value;
@@ -89,13 +88,12 @@ bool Config::get_bool(const std::string& key, bool default_value) const {
     }
 
     // Convert to lowercase for comparison
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+    std::string lower_value = utils::to_lower(value);
 
-    if (value == "true" || value == "1" || value == "yes" || value == "on") {
+    if (lower_value == "true" || lower_value == "1" || lower_value == "yes" || lower_value == "on") {
         return true;
     }
-    if (value == "false" || value == "0" || value == "no" || value == "off") {
+    if (lower_value == "false" || lower_value == "0" || lower_value == "no" || lower_value == "off") {
         return false;
     }
     return default_value;
@@ -104,15 +102,6 @@ bool Config::get_bool(const std::string& key, bool default_value) const {
 void Config::set(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
     values_[key] = value;
-}
-
-std::string Config::trim(const std::string& str) const {
-    size_t start = str.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) {
-        return "";
-    }
-    size_t end = str.find_last_not_of(" \t\r\n");
-    return str.substr(start, end - start + 1);
 }
 
 } // namespace seeddb

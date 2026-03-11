@@ -1,7 +1,6 @@
 # Common utilities library
 add_library(seeddb_common STATIC
     error.cpp
-    logger.cpp
     config.cpp
 )
 

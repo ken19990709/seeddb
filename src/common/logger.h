@@ -4,6 +4,7 @@
 #include <string>
 #include <fstream>
 #include <mutex>
+#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <sstream>
@@ -30,14 +31,15 @@ public:
         return instance;
     }
 
-    /// Set minimum log level
+    /// Set minimum log level (thread-safe, lock-free)
     void set_level(LogLevel level) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        level_ = level;
+        level_.store(level, std::memory_order_relaxed);
     }
 
-    /// Get current log level
-    LogLevel level() const { return level_; }
+    /// Get current log level (thread-safe, lock-free)
+    LogLevel level() const {
+        return level_.load(std::memory_order_relaxed);
+    }
 
     /// Open log file for writing
     bool open_file(const std::string& path) {
@@ -67,7 +69,8 @@ public:
 
     /// Log a message at the given level
     void log(LogLevel level, const std::string& message) {
-        if (level < level_) {
+        // Fast path: atomic check without lock (optimization for filtered messages)
+        if (level < level_.load(std::memory_order_relaxed)) {
             return;
         }
 
@@ -98,7 +101,7 @@ public:
     void fatal(const std::string& message) { log(LogLevel::FATAL, message); }
 
 private:
-    Logger() : level_(LogLevel::INFO) {}
+    Logger() : level_(LogLevel::INFO), file_() {}
     ~Logger() { close(); }
 
     Logger(const Logger&) = delete;
@@ -132,7 +135,7 @@ private:
         }
     }
 
-    LogLevel level_;
+    std::atomic<LogLevel> level_;
     std::ofstream file_;
     mutable std::mutex mutex_;
 };
