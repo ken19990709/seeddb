@@ -1,11 +1,12 @@
 # Test executable
 add_executable(seeddb_tests)
 
-# Link with Catch2 and common library
+# Link with Catch2 and libraries
 target_link_libraries(seeddb_tests
     PRIVATE
         Catch2::Catch2WithMain
         seeddb_common
+        seeddb_parser
 )
 
 # Enable CTest integration with Catch2
@@ -20,4 +21,5 @@ target_sources(seeddb_tests
         unit/common/test_error.cpp
         unit/common/test_logger.cpp
         unit/common/test_config.cpp
+        unit/parser/test_lexer.cpp
 )

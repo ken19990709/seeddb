@@ -20,6 +20,12 @@ enum class ErrorCode : int {
     SYNTAX_ERROR = 100,
     INVALID_IDENTIFIER = 101,
 
+    // Lexer errors (110-119)
+    UNEXPECTED_CHARACTER = 110,
+    UNTERMINATED_STRING = 111,
+    INVALID_NUMBER = 112,
+    INVALID_ESCAPE_SEQUENCE = 113,
+
     // Semantic errors (200-299)
     TABLE_NOT_FOUND = 200,
     COLUMN_NOT_FOUND = 201,

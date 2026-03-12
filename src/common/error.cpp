@@ -15,6 +15,12 @@ const char* error_code_name(ErrorCode code) {
         case ErrorCode::SYNTAX_ERROR:      return "SYNTAX_ERROR";
         case ErrorCode::INVALID_IDENTIFIER: return "INVALID_IDENTIFIER";
 
+        // Lexer errors
+        case ErrorCode::UNEXPECTED_CHARACTER: return "UNEXPECTED_CHARACTER";
+        case ErrorCode::UNTERMINATED_STRING: return "UNTERMINATED_STRING";
+        case ErrorCode::INVALID_NUMBER:    return "INVALID_NUMBER";
+        case ErrorCode::INVALID_ESCAPE_SEQUENCE: return "INVALID_ESCAPE_SEQUENCE";
+
         // Semantic errors
         case ErrorCode::TABLE_NOT_FOUND:   return "TABLE_NOT_FOUND";
         case ErrorCode::COLUMN_NOT_FOUND:  return "COLUMN_NOT_FOUND";
@@ -63,6 +69,12 @@ const char* error_code_message(ErrorCode code) {
         // Parsing errors
         case ErrorCode::SYNTAX_ERROR:      return "Syntax error";
         case ErrorCode::INVALID_IDENTIFIER: return "Invalid identifier";
+
+        // Lexer errors
+        case ErrorCode::UNEXPECTED_CHARACTER: return "Unexpected character";
+        case ErrorCode::UNTERMINATED_STRING: return "Unterminated string literal";
+        case ErrorCode::INVALID_NUMBER:    return "Invalid number format";
+        case ErrorCode::INVALID_ESCAPE_SEQUENCE: return "Invalid escape sequence";
 
         // Semantic errors
         case ErrorCode::TABLE_NOT_FOUND:   return "Table not found";
