@@ -14,6 +14,8 @@ cmake .. && make -j$(nproc)
 ctest --output-on-failure
 ```
 
+Compilation optimizations enabled: PCH, Unity Build, CCache (if installed)
+
 ## Project Structure
 
 ```
@@ -65,7 +67,7 @@ tests/
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Project setup, core utilities | ✅ Complete |
-| 1 | SQL Lexer | 🔄 Next |
-| 2 | SQL Parser | 📋 Planned |
+| 1 | SQL Lexer | ✅ Complete |
+| 2 | SQL Parser | ✅ Complete |
 | 3 | Storage engine | 📋 Planned |
 | 4 | Query executor | 📋 Planned |
