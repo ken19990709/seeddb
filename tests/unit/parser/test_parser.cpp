@@ -2,8 +2,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include "parser/parser.h"
 #include "parser/lexer.h"
+#include "common/error.h"
 
 using namespace seeddb::parser;
+using namespace seeddb;
 
 TEST_CASE("Parser: construction", "[parser]") {
     Lexer lexer("SELECT 1");
@@ -285,5 +287,90 @@ TEST_CASE("Parser: Expressions", "[parser]") {
 
         auto result = parser.parse();
         REQUIRE(result.is_ok());
+    }
+}
+
+// ===== Error Handling Tests =====
+
+TEST_CASE("Parser: Error handling", "[parser]") {
+    SECTION("Syntax error - missing FROM") {
+        std::string sql = "SELECT *";  // Missing FROM clause
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("Syntax error - unexpected token") {
+        std::string sql = "INVALID KEYWORD";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("Syntax error - missing table name") {
+        std::string sql = "SELECT * FROM";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("Syntax error - missing closing paren") {
+        std::string sql = "SELECT * FROM t WHERE (a = 1";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("CREATE TABLE - missing column list") {
+        std::string sql = "CREATE TABLE users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("INSERT - missing VALUES") {
+        std::string sql = "INSERT INTO users (id) (1)";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("UPDATE - missing SET") {
+        std::string sql = "UPDATE users name = 'test'";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        REQUIRE(result.error().code() == ErrorCode::SYNTAX_ERROR);
+    }
+
+    SECTION("Error message is descriptive") {
+        std::string sql = "SELECT * FORM users";  // FORM instead of FROM
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE_FALSE(result.is_ok());
+        // Error message should mention what was expected
+        REQUIRE_FALSE(result.error().message().empty());
     }
 }
