@@ -808,7 +808,7 @@ std::string TableRef::toString() const {
     return name_;
 }
 
- std::string SelectStmt::toString() const {
+std::string SelectStmt::toString() const {
     std::string result = "SELECT ";
     if (select_all_) {
         result += "*";
@@ -873,12 +873,8 @@ Create parser.h with basic infrastructure and token manipulation methods.
 - Create: `src/parser/parser.cpp`
 - Create: `tests/unit/parser/test_parser.cpp`
 - Modify: `src/parser/CMakeLists.txt`
-- modify: `tests/CMakeLists.txt`
+- Modify: `tests/CMakeLists.txt`
 - Update: `docs/superpowers/progress.md`
-
- (Phase 2: 100% complete)
-
- **Steps:**
 
 - [ ] **Step 1: Write failing tests for parser construction**
 
@@ -896,10 +892,7 @@ TEST_CASE("Parser: construction", "[parser]") {
     Parser parser(lexer);
 
     REQUIRE(parser.has_more());  // Should have tokens available
-}
-
- REQUIRE(parser.current().type == TokenType::SELECT);
-    }
+    REQUIRE(parser.current().type == TokenType::SELECT);
 }
 ```
 
@@ -943,23 +936,33 @@ public:
     const Token& current() const;
 
     /// Get current token type
-    TokenType currentType() const { return current_token_.type; }
+    TokenType currentType() const;
 
     /// Consume and return current token
     Token consume();
 
-    /// Expect specific token type,    Result<Token> expect(TokenType type, const char* message);
+    /// Expect specific token type, return error if mismatch
+    Result<Token> expect(TokenType type, const char* message);
+
     /// Check if current token matches type
     bool check(TokenType type) const;
+
     /// Match and consume if type matches
     bool match(TokenType type);
 
 private:
     Lexer& lexer_;
     Token current_token_;
-    std::string current_keyword_;
+    bool initialized_ = false;
+
+    /// Initialize the first token from lexer
+    void advance();
 };
 
+} // namespace parser
+} // namespace seeddb
+
+#endif // SEEDDB_PARSER_PARSER_H
 ```
 
 - [ ] **Step 4: Implement parser.cpp skeleton**
@@ -977,69 +980,72 @@ namespace seeddb {
 namespace parser {
 
 Parser::Parser(Lexer& lexer) : lexer_(lexer) {
-    // Initialize current token
-    auto first = lexer.peek_token();
-    if (first.is_ok()) {
-        current_token_ = first.value();
-    } else {
-        current_token_ = {TokenType::END_OF_INPUT, {}, std::monostate{}};
-        }
-    }
+    // Initialize current token from lexer
+    advance();
 }
 
-Parser::~Parser() = default;
-
+void Parser::advance() {
+    auto result = lexer_.peek_token();
+    if (result.is_ok()) {
+        current_token_ = lexer_.next_token();
+    } else {
+        current_token_ = {TokenType::END_OF_INPUT, {}, std::monostate{}};
+    }
 }
 
 bool Parser::has_more() const {
-    return lexer_.has_more();
-    }
+    return current_token_.type != TokenType::END_OF_INPUT;
+}
 
 const Token& Parser::current() const {
     return current_token_;
-        }
+}
 
 TokenType Parser::currentType() const {
-            return current_token_.type;
-        }
+    return current_token_.type;
+}
 
 Token Parser::consume() {
-            auto old = current_token_;
-            if (lexer_.peek_token().is_ok()) {
-                current_token_ = lexer_.next_token();
-                // Update current_keyword_
-                current_keyword_ = extractKeywordString(old.value);
-                : old.value;
-                : std::get<std::string>(old.value);
-            }
-            return "";
-        }
-        return "";
-    }
-        return TokenType::END_OF_INPUT;
-    }
+    Token old = current_token_;
+    advance();
+    return old;
+}
 
 Result<Token> Parser::expect(TokenType type, const char* message) {
-    auto result = lexer_.peek_token();
-    if (!result.is_ok()) {
+    if (current_token_.type != type) {
         return Result<Token>::err(ErrorCode::SYNTAX_ERROR,
- "Expected " + std::string(message));
+            "Expected " + std::string(message) + ", got " +
+            token_type_name(current_token_.type));
     }
-    auto tok = result.value;
-    current_token_ = tok;
-    return Result<Token>::ok(std_token_);
+    return Result<Token>::ok(consume());
 }
 
- }
-        return Result<Token>::err(ErrorCode::SYNTAX_ERROR,
- "Expected " + std::string(message));
-    }
-}
-
-Token Parser::check(TokenType type) const {
+bool Parser::check(TokenType type) const {
     return current_token_.type == type;
 }
 
+bool Parser::match(TokenType type) {
+    if (check(type)) {
+        consume();
+        return true;
+    }
+    return false;
+}
+
+// Placeholder implementation for parse()
+Result<std::unique_ptr<Stmt>> Parser::parse() {
+    return Result<std::unique_ptr<Stmt>>::err(
+        ErrorCode::NOT_IMPLEMENTED, "Parser::parse() not yet implemented");
+}
+
+// Placeholder implementation for parseAll()
+Result<std::vector<std::unique_ptr<Stmt>>> Parser::parseAll() {
+    return Result<std::vector<std::unique_ptr<Stmt>>>::err(
+        ErrorCode::NOT_IMPLEMENTED, "Parser::parseAll() not yet implemented");
+}
+
+} // namespace parser
+} // namespace seeddb
 ```
 
 - [ ] **Step 5: Update CMakeLists.txt**
@@ -1058,7 +1064,11 @@ add_library(seeddb_parser STATIC
 Add to `tests/CMakeLists.txt`:
 
 ```cmake
+target_sources(seeddb_tests
+    PRIVATE
+        # ... existing sources ...
         unit/parser/test_parser.cpp
+)
 ```
 
 - [ ] **Step 6: Run tests and commit**
@@ -1074,20 +1084,20 @@ git commit -m "feat(parser): add parser class infrastructure
 
 - Parser class with Lexer reference
 - Token lookahead (current_token_, has_more())
-- Token manipulation: consume(), expect(), check()
-- Add parser to CMakeLists and
-- Add test file to CMakeLists
-"
+- Token manipulation: consume(), expect(), check(), match()
+- Add parser to CMakeLists
+- Add test file to CMakeLists"
 ```
 
 ---
 
 ## Chunk 6: DDL Statement Parsing
-Implement CREATE TABLE and DROP table parsing
+Implement CREATE TABLE and DROP TABLE parsing
 
 ### Task 6: Implement DDL parsing
 
 **Files:**
+- Modify: `src/parser/parser.h`
 - Modify: `src/parser/parser.cpp`
 - Modify: `tests/unit/parser/test_parser.cpp`
 
@@ -1119,13 +1129,42 @@ TEST_CASE("Parser: CREATE TABLE", "[parser]") {
 
 Run: `cd build && make -j$(nproc) && ctest --output-on-failure -R test_parser`
 
-Expected: FAIL (parseCreateTable not implemented)
+Expected: FAIL (parse not implemented)
 
-- [ ] **Step 3: Implement parseCreateTable**
+- [ ] **Step 3: Add private method declarations to parser.h**
+
+Add to private section of `src/parser/parser.h`:
+
+```cpp
+private:
+    // ... existing members ...
+
+    // Statement parsing
+    Result<std::unique_ptr<Stmt>> parseStatement();
+    Result<std::unique_ptr<CreateTableStmt>> parseCreateTable();
+    Result<std::unique_ptr<DropTableStmt>> parseDropTable();
+
+    // Column parsing
+    Result<std::vector<std::unique_ptr<ColumnDef>>> parseColumnDefList();
+    Result<std::unique_ptr<ColumnDef>> parseColumnDef();
+    Result<DataTypeInfo> parseDataType();
+
+    // Error helper
+    template<typename T>
+    Result<T> syntax_error(const std::string& message) const {
+        return Result<T>::err(ErrorCode::SYNTAX_ERROR, message);
+    }
+```
+
+- [ ] **Step 4: Implement parseStatement and parseCreateTable**
 
 Add to `src/parser/parser.cpp`:
 
 ```cpp
+Result<std::unique_ptr<Stmt>> Parser::parse() {
+    return parseStatement();
+}
+
 Result<std::unique_ptr<Stmt>> Parser::parseStatement() {
     switch (current_token_.type) {
         case TokenType::CREATE:
@@ -1133,89 +1172,80 @@ Result<std::unique_ptr<Stmt>> Parser::parseStatement() {
         case TokenType::DROP:
             return parseDropTable();
         case TokenType::SELECT:
-            return parseSelect();
         case TokenType::INSERT:
-            return parseInsert();
         case TokenType::UPDATE:
-            return parseUpdate();
         case TokenType::DELETE:
-            return parseDelete();
+            return syntax_error<std::unique_ptr<Stmt>>("DML statements not yet implemented");
         default:
-            return syntax_error("Unexpected token: " + token_type_name(current_token_.type));
+            return syntax_error<std::unique_ptr<Stmt>>(
+                "Unexpected token: " + token_type_name(current_token_.type));
     }
 }
 
 Result<std::unique_ptr<CreateTableStmt>> Parser::parseCreateTable() {
     // Expect CREATE
-    auto tok = consume();
-    if (tok.type != TokenType::CREATE) {
-        return syntax_error("Expected CREATE");
+    if (!match(TokenType::CREATE)) {
+        return syntax_error<std::unique_ptr<CreateTableStmt>>("Expected CREATE");
     }
 
     // Expect TABLE
-    tok = consume();
-    if (tok.type != TokenType::TABLE) {
-        return syntax_error("Expected TABLE");
+    if (!match(TokenType::TABLE)) {
+        return syntax_error<std::unique_ptr<CreateTableStmt>>("Expected TABLE");
     }
 
     // Get table name
-    tok = consume();
-    if (tok.type != TokenType::IDENTIFIER) {
-        return syntax_error("Expected table name");
+    if (!check(TokenType::IDENTIFIER)) {
+        return syntax_error<std::unique_ptr<CreateTableStmt>>("Expected table name");
     }
-    auto table_name = std::get<std::string>(tok.value);
-
-    consume();  // consume TABLE
+    std::string table_name = std::get<std::string>(current_token_.value);
+    consume();
 
     // Expect (
-    if (!check(TokenType::LPAREN)) {
-        return syntax_error("Expected '('");
+    if (!match(TokenType::LPAREN)) {
+        return syntax_error<std::unique_ptr<CreateTableStmt>>("Expected '('");
     }
-    consume();
 
     // Parse column definitions
     auto columns = parseColumnDefList();
     if (!columns.is_ok()) {
-        return Result<std::vector<std::unique_ptr<ColumnDef>>>::err(columns.error());
+        return syntax_error<std::unique_ptr<CreateTableStmt>>(columns.error().message());
     }
 
     // Expect )
-    if (!check(TokenType::RPAREN)) {
-        return syntax_error("Expected ')");
+    if (!match(TokenType::RPAREN)) {
+        return syntax_error<std::unique_ptr<CreateTableStmt>>("Expected ')'");
     }
-    consume();
 
     auto stmt = std::make_unique<CreateTableStmt>(std::move(table_name));
     for (auto& col : columns.value()) {
         stmt->addColumn(std::move(col));
     }
-    return Result<std::unique_ptr<CreateTableStmt>>::ok(std_cast(stmt));
-    }
-
-    return syntax_error("Expected ')' + token_type_name(current_token_.type));
+    return Result<std::unique_ptr<CreateTableStmt>>::ok(std::move(stmt));
 }
 ```
 
-- [ ] **Step 4: Implement helper methods for column parsing**
+- [ ] **Step 5: Implement helper methods for column parsing**
 
-Add helper methods for `src/parser/parser.cpp`:
+Add to `src/parser/parser.cpp`:
 
 ```cpp
 Result<std::vector<std::unique_ptr<ColumnDef>>> Parser::parseColumnDefList() {
     std::vector<std::unique_ptr<ColumnDef>> columns;
 
-    while (check(TokenType::RPAREN)) {
+    // Parse columns until we hit RPAREN
+    while (!check(TokenType::RPAREN) && has_more()) {
         auto col = parseColumnDef();
         if (!col.is_ok()) {
             return Result<std::vector<std::unique_ptr<ColumnDef>>>::err(col.error());
         }
         columns.push_back(std::move(col.value()));
 
-        if (match(TokenType::COMMA)) {
+        // Optional comma
+        if (check(TokenType::COMMA)) {
             consume();
-            continue;
+        } else {
+            break;  // No comma means end of list
         }
-        break;
     }
 
     return Result<std::vector<std::unique_ptr<ColumnDef>>>::ok(std::move(columns));
@@ -1224,7 +1254,7 @@ Result<std::vector<std::unique_ptr<ColumnDef>>> Parser::parseColumnDefList() {
 Result<std::unique_ptr<ColumnDef>> Parser::parseColumnDef() {
     // Column name
     if (!check(TokenType::IDENTIFIER)) {
-        return syntax_error("Expected column name");
+        return syntax_error<std::unique_ptr<ColumnDef>>("Expected column name");
     }
     std::string name = std::get<std::string>(current_token_.value);
     consume();
@@ -1240,7 +1270,7 @@ Result<std::unique_ptr<ColumnDef>> Parser::parseColumnDef() {
     // Optional NOT NULL
     if (match(TokenType::NOT)) {
         if (!match(TokenType::NULL_LIT)) {
-            return syntax_error("Expected NULL after NOT");
+            return syntax_error<std::unique_ptr<ColumnDef>>("Expected NULL after NOT");
         }
         col->setNullable(false);
     }
@@ -1249,54 +1279,67 @@ Result<std::unique_ptr<ColumnDef>> Parser::parseColumnDef() {
 }
 
 Result<DataTypeInfo> Parser::parseDataType() {
-    // Map token types to data types
     DataType type;
+
     switch (current_token_.type) {
         case TokenType::INTEGER:
         case TokenType::INT:
             type = DataType::INT;
-            break;
+            consume();
+            return Result<DataTypeInfo>::ok(DataTypeInfo(type));
+
         case TokenType::BIGINT:
             type = DataType::BIGINT;
-            break;
+            consume();
+            return Result<DataTypeInfo>::ok(DataTypeInfo(type));
+
         case TokenType::FLOAT:
             type = DataType::FLOAT;
-            break;
+            consume();
+            return Result<DataTypeInfo>::ok(DataTypeInfo(type));
+
         case TokenType::DOUBLE:
             type = DataType::DOUBLE;
-            break;
+            consume();
+            return Result<DataTypeInfo>::ok(DataTypeInfo(type));
+
         case TokenType::VARCHAR: {
             type = DataType::VARCHAR;
             size_t length = 0;
+            consume();
+
             if (match(TokenType::LPAREN)) {
                 if (!check(TokenType::INTEGER_LIT)) {
-                    return syntax_error("Expected VARCHAR length");
+                    return syntax_error<DataTypeInfo>("Expected VARCHAR length");
                 }
                 length = static_cast<size_t>(std::get<int64_t>(current_token_.value));
                 consume();
+
                 if (!match(TokenType::RPAREN)) {
-                    return syntax_error("Expected ')'");
+                    return syntax_error<DataTypeInfo>("Expected ')' after VARCHAR length");
                 }
             }
-            consume();
             return Result<DataTypeInfo>::ok(DataTypeInfo(type, length));
         }
+
         case TokenType::TEXT:
             type = DataType::TEXT;
-            break;
+            consume();
+            return Result<DataTypeInfo>::ok(DTypeInfo(type));
+
         case TokenType::BOOLEAN:
         case TokenType::BOOL:
             type = DataType::BOOLEAN;
-            break;
+            consume();
+            return Result<DataTypeInfo>::ok(DataTypeInfo(type));
+
         default:
-            return syntax_error("Expected data type");
+            return syntax_error<DataTypeInfo>("Expected data type");
     }
-    consume();
-    return Result<DataTypeInfo>::ok(DataTypeInfo(type));
 }
 ```
 
-- [ ] **Step 5: Write test for DROP TABLE**
+- [ ] **Step 6: Write test for DROP TABLE**
 
 ```cpp
 TEST_CASE("Parser: DROP TABLE", "[parser]") {
@@ -1330,27 +1373,32 @@ TEST_CASE("Parser: DROP TABLE", "[parser]") {
 }
 ```
 
-- [ ] **Step 6: Implement parseDropTable**
+- [ ] **Step 7: Implement parseDropTable**
 
 ```cpp
 Result<std::unique_ptr<DropTableStmt>> Parser::parseDropTable() {
-    consume();  // DROP
-
-    if (!check(TokenType::TABLE)) {
-        return syntax_error("Expected TABLE");
+    // Expect DROP
+    if (!match(TokenType::DROP)) {
+        return syntax_error<std::unique_ptr<DropTableStmt>>("Expected DROP");
     }
-    consume();
 
+    // Expect TABLE
+    if (!match(TokenType::TABLE)) {
+        return syntax_error<std::unique_ptr<DropTableStmt>>("Expected TABLE");
+    }
+
+    // Optional IF EXISTS
     bool if_exists = false;
     if (match(TokenType::IF)) {
         if (!match(TokenType::EXISTS)) {
-            return syntax_error("Expected EXISTS after IF");
+            return syntax_error<std::unique_ptr<DropTableStmt>>("Expected EXISTS after IF");
         }
         if_exists = true;
     }
 
+    // Get table name
     if (!check(TokenType::IDENTIFIER)) {
-        return syntax_error("Expected table name");
+        return syntax_error<std::unique_ptr<DropTableStmt>>("Expected table name");
     }
     std::string name = std::get<std::string>(current_token_.value);
     consume();
@@ -1361,7 +1409,7 @@ Result<std::unique_ptr<DropTableStmt>> Parser::parseDropTable() {
 }
 ```
 
-- [ ] **Step 7: Run tests and commit**
+- [ ] **Step 8: Run tests and commit**
 
 Run: `cd build && make -j$(nproc) && ctest --output-on-failure -R test_parser`
 
@@ -1380,16 +1428,43 @@ git commit -m "feat(parser): implement DDL statement parsing
 
 ---
 
-## Chunk 7: DML Statement parsing
+## Chunk 7: DML Statement Parsing
 Implement INSERT, SELECT, UPDATE, DELETE parsing
 
 ### Task 7: Implement DML parsing
 
 **Files:**
+- Modify: `src/parser/parser.h`
 - Modify: `src/parser/parser.cpp`
 - Modify: `tests/unit/parser/test_parser.cpp`
 
-- [ ] **Step 1: Write failing tests for SELECT**
+- [ ] **Step 1: Add private method declarations for DML**
+
+Add to private section of `src/parser/parser.h`:
+
+```cpp
+    // DML statement parsing
+    Result<std::unique_ptr<SelectStmt>> parseSelect();
+    Result<std::unique_ptr<InsertStmt>> parseInsert();
+    Result<std::unique_ptr<UpdateStmt>> parseUpdate();
+    Result<std::unique_ptr<DeleteStmt>> parseDelete();
+
+    // Expression parsing
+    Result<std::unique_ptr<Expr>> parseExpression();
+    Result<std::unique_ptr<Expr>> parseOrExpr();
+    Result<std::unique_ptr<Expr>> parseAndExpr();
+    Result<std::unique_ptr<Expr>> parseNotExpr();
+    Result<std::unique_ptr<Expr>> parseComparisonExpr();
+    Result<std::unique_ptr<Expr>> parseAdditiveExpr();
+    Result<std::unique_ptr<Expr>> parseMultiplicativeExpr();
+    Result<std::unique_ptr<Expr>> parseUnaryExpr();
+    Result<std::unique_ptr<Expr>> parsePrimaryExpr();
+
+    // Table reference
+    Result<std::unique_ptr<TableRef>> parseTableRef();
+```
+
+- [ ] **Step 2: Write failing tests for SELECT**
 
 ```cpp
 TEST_CASE("Parser: SELECT", "[parser]") {
@@ -1425,11 +1500,16 @@ TEST_CASE("Parser: SELECT", "[parser]") {
 }
 ```
 
-- [ ] **Step 2: Implement parseSelect**
+- [ ] **Step 3: Implement parseSelect**
+
+Add to `src/parser/parser.cpp`:
 
 ```cpp
 Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
-    consume();  // SELECT
+    // Expect SELECT
+    if (!match(TokenType::SELECT)) {
+        return syntax_error<std::unique_ptr<SelectStmt>>("Expected SELECT");
+    }
 
     auto stmt = std::make_unique<SelectStmt>();
 
@@ -1450,7 +1530,7 @@ Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
 
     // FROM clause
     if (!match(TokenType::FROM)) {
-        return syntax_error("Expected FROM");
+        return syntax_error<std::unique_ptr<SelectStmt>>("Expected FROM");
     }
 
     auto table = parseTableRef();
@@ -1472,9 +1552,9 @@ Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
 }
 ```
 
-- [ ] **Step 3: Implement parseExpression (basic version)**
+- [ ] **Step 4: Implement parseExpression with operator precedence**
 
-Add minimal expression parsing for initial tests:
+Add to `src/parser/parser.cpp`:
 
 ```cpp
 Result<std::unique_ptr<Expr>> Parser::parseExpression() {
@@ -1485,7 +1565,8 @@ Result<std::unique_ptr<Expr>> Parser::parseOrExpr() {
     auto left = parseAndExpr();
     if (!left.is_ok()) return left;
 
-    while (match(TokenType::OR)) {
+    while (check(TokenType::OR)) {
+        consume();
         auto right = parseAndExpr();
         if (!right.is_ok()) return right;
 
@@ -1495,13 +1576,208 @@ Result<std::unique_ptr<Expr>> Parser::parseOrExpr() {
     }
     return left;
 }
+
+Result<std::unique_ptr<Expr>> Parser::parseAndExpr() {
+    auto left = parseNotExpr();
+    if (!left.is_ok()) return left;
+
+    while (check(TokenType::AND)) {
+        consume();
+        auto right = parseNotExpr();
+        if (!right.is_ok()) return right;
+
+        left = Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<BinaryExpr>("AND", std::move(left.value()), std::move(right.value()))
+        );
+    }
+    return left;
+}
+
+Result<std::unique_ptr<Expr>> Parser::parseNotExpr() {
+    if (check(TokenType::NOT)) {
+        consume();
+        auto operand = parseNotExpr();
+        if (!operand.is_ok()) return operand;
+
+        return Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<UnaryExpr>("NOT", std::move(operand.value()))
+        );
+    }
+    return parseComparisonExpr();
+}
+
+Result<std::unique_ptr<Expr>> Parser::parseComparisonExpr() {
+    auto left = parseAdditiveExpr();
+    if (!left.is_ok()) return left;
+
+    // Check for comparison operators
+    std::string op;
+    if (check(TokenType::EQ)) op = "=";
+    else if (check(TokenType::NE)) op = "<>";
+    else if (check(TokenType::LT)) op = "<";
+    else if (check(TokenType::GT)) op = ">";
+    else if (check(TokenType::LE)) op = "<=";
+    else if (check(TokenType::GE)) op = ">=";
+
+    if (!op.empty()) {
+        consume();
+        auto right = parseAdditiveExpr();
+        if (!right.is_ok()) return right;
+
+        return Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<BinaryExpr>(op, std::move(left.value()), std::move(right.value()))
+        );
+    }
+
+    return left;
+}
+
+Result<std::unique_ptr<Expr>> Parser::parseAdditiveExpr() {
+    auto left = parseMultiplicativeExpr();
+    if (!left.is_ok()) return left;
+
+    while (check(TokenType::PLUS) || check(TokenType::MINUS) || check(TokenType::CONCAT)) {
+        std::string op;
+        if (check(TokenType::PLUS)) op = "+";
+        else if (check(TokenType::MINUS)) op = "-";
+        else op = "||";
+        consume();
+
+        auto right = parseMultiplicativeExpr();
+        if (!right.is_ok()) return right;
+
+        left = Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<BinaryExpr>(op, std::move(left.value()), std::move(right.value()))
+        );
+    }
+    return left;
+}
+
+Result<std::unique_ptr<Expr>> Parser::parseMultiplicativeExpr() {
+    auto left = parseUnaryExpr();
+    if (!left.is_ok()) return left;
+
+    while (check(TokenType::STAR) || check(TokenType::SLASH) || check(TokenType::PERCENT)) {
+        std::string op;
+        if (check(TokenType::STAR)) op = "*";
+        else if (check(TokenType::SLASH)) op = "/";
+        else op = "%";
+        consume();
+
+        auto right = parseUnaryExpr();
+        if (!right.is_ok()) return right;
+
+        left = Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<BinaryExpr>(op, std::move(left.value()), std::move(right.value()))
+        );
+    }
+    return left;
+}
+
+Result<std::unique_ptr<Expr>> Parser::parseUnaryExpr() {
+    if (check(TokenType::MINUS) || check(TokenType::PLUS)) {
+        std::string op = check(TokenType::MINUS) ? "-" : "+";
+        consume();
+        auto operand = parseUnaryExpr();
+        if (!operand.is_ok()) return operand;
+
+        return Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<UnaryExpr>(op, std::move(operand.value()))
+        );
+    }
+    return parsePrimaryExpr();
+}
+
+Result<std::unique_ptr<Expr>> Parser::parsePrimaryExpr() {
+    // Literals
+    if (check(TokenType::INTEGER_LIT)) {
+        auto val = TokenValue{std::get<int64_t>(current_token_.value)};
+        consume();
+        return Result<std::unique_ptr<Expr>>::ok(std::make_unique<LiteralExpr>(val));
+    }
+    if (check(TokenType::FLOAT_LIT)) {
+        auto val = TokenValue{std::get<double>(current_token_.value)};
+        consume();
+        return Result<std::unique_ptr<Expr>>::ok(std::make_unique<LiteralExpr>(val));
+    }
+    if (check(TokenType::STRING_LIT)) {
+        auto val = TokenValue{std::get<std::string>(current_token_.value)};
+        consume();
+        return Result<std::unique_ptr<Expr>>::ok(std::make_unique<LiteralExpr>(val));
+    }
+    if (check(TokenType::TRUE_LIT) || check(TokenType::FALSE_LIT)) {
+        auto val = TokenValue{check(TokenType::TRUE_LIT)};
+        consume();
+        return Result<std::unique_ptr<Expr>>::ok(std::make_unique<LiteralExpr>(val));
+    }
+    if (check(TokenType::NULL_LIT)) {
+        consume();
+        return Result<std::unique_ptr<Expr>>::ok(std::make_unique<LiteralExpr>());
+    }
+
+    // Parenthesized expression
+    if (match(TokenType::LPAREN)) {
+        auto expr = parseExpression();
+        if (!expr.is_ok()) return expr;
+        if (!match(TokenType::RPAREN)) {
+            return syntax_error<std::unique_ptr<Expr>>("Expected ')'");
+        }
+        return expr;
+    }
+
+    // Column reference
+    if (check(TokenType::IDENTIFIER)) {
+        std::string name = std::get<std::string>(current_token_.value);
+        consume();
+
+        // Check for table.column
+        if (match(TokenType::DOT)) {
+            if (!check(TokenType::IDENTIFIER)) {
+                return syntax_error<std::unique_ptr<Expr>>("Expected column name after '.'");
+            }
+            std::string col = std::get<std::string>(current_token_.value);
+            consume();
+            return Result<std::unique_ptr<Expr>>::ok(
+                std::make_unique<ColumnRef>(std::move(name), std::move(col)));
+        }
+
+        return Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<ColumnRef>(std::move(name)));
+    }
+
+    return syntax_error<std::unique_ptr<Expr>>("Expected expression");
+}
 ```
 
-- [ ] **Step 4: Implement remaining expression methods**
+- [ ] **Step 5: Implement parseTableRef**
 
-Implement parseAndExpr, parseNotExpr, parseComparisonExpr, parseAdditiveExpr, parseMultiplicativeExpr, parseUnaryExpr, parsePrimaryExpr following the operator precedence in the spec
+```cpp
+Result<std::unique_ptr<TableRef>> Parser::parseTableRef() {
+    if (!check(TokenType::IDENTIFIER)) {
+        return syntax_error<std::unique_ptr<TableRef>>("Expected table name");
+    }
+    std::string name = std::get<std::string>(current_token_.value);
+    consume();
 
-- [ ] **Step 5: Write tests for INSERT**
+    // Optional alias
+    std::string alias;
+    if (match(TokenType::AS)) {
+        if (!check(TokenType::IDENTIFIER)) {
+            return syntax_error<std::unique_ptr<TableRef>>("Expected alias after AS");
+        }
+        alias = std::get<std::string>(current_token_.value);
+        consume();
+    }
+
+    if (alias.empty()) {
+        return Result<std::unique_ptr<TableRef>>::ok(std::make_unique<TableRef>(std::move(name)));
+    }
+    return Result<std::unique_ptr<TableRef>>::ok(
+        std::make_unique<TableRef>(std::move(name), std::move(alias)));
+}
+```
+
+- [ ] **Step 6: Write tests for INSERT**
 
 ```cpp
 TEST_CASE("Parser: INSERT", "[parser]") {
@@ -1524,18 +1800,23 @@ TEST_CASE("Parser: INSERT", "[parser]") {
 }
 ```
 
-- [ ] **Step 6: Implement parseInsert**
+- [ ] **Step 7: Implement parseInsert**
 
 ```cpp
 Result<std::unique_ptr<InsertStmt>> Parser::parseInsert() {
-    consume();  // INSERT
-
-    if (!match(TokenType::INTO)) {
-        return syntax_error("Expected INTO");
+    // Expect INSERT
+    if (!match(TokenType::INSERT)) {
+        return syntax_error<std::unique_ptr<InsertStmt>>("Expected INSERT");
     }
 
+    // Expect INTO
+    if (!match(TokenType::INTO)) {
+        return syntax_error<std::unique_ptr<InsertStmt>>("Expected INTO");
+    }
+
+    // Get table name
     if (!check(TokenType::IDENTIFIER)) {
-        return syntax_error("Expected table name");
+        return syntax_error<std::unique_ptr<InsertStmt>>("Expected table name");
     }
     auto stmt = std::make_unique<InsertStmt>(std::get<std::string>(current_token_.value));
     consume();
@@ -1544,25 +1825,24 @@ Result<std::unique_ptr<InsertStmt>> Parser::parseInsert() {
     if (match(TokenType::LPAREN)) {
         do {
             if (!check(TokenType::IDENTIFIER)) {
-                return syntax_error("Expected column name");
+                return syntax_error<std::unique_ptr<InsertStmt>>("Expected column name");
             }
             stmt->addColumn(std::get<std::string>(current_token_.value));
             consume();
         } while (match(TokenType::COMMA));
 
         if (!match(TokenType::RPAREN)) {
-            return syntax_error("Expected ')'");
+            return syntax_error<std::unique_ptr<InsertStmt>>("Expected ')'");
         }
-    }
     }
 
     // VALUES
     if (!match(TokenType::VALUES)) {
-        return syntax_error("Expected VALUES");
+        return syntax_error<std::unique_ptr<InsertStmt>>("Expected VALUES");
     }
 
     if (!match(TokenType::LPAREN)) {
-        return syntax_error("Expected '('");
+        return syntax_error<std::unique_ptr<InsertStmt>>("Expected '('");
     }
 
     do {
@@ -1574,22 +1854,48 @@ Result<std::unique_ptr<InsertStmt>> Parser::parseInsert() {
     } while (match(TokenType::COMMA));
 
     if (!match(TokenType::RPAREN)) {
-        return syntax_error("Expected ')'");
+        return syntax_error<std::unique_ptr<InsertStmt>>("Expected ')'");
     }
 
     return Result<std::unique_ptr<InsertStmt>>::ok(std::move(stmt));
-    }
+}
 ```
 
-- [ ] **Step 7: Write tests for UPDATE and DELETE**
+- [ ] **Step 8: Write tests for UPDATE and DELETE**
 
-Add tests for UPDATE and DELETE statements
+Add tests for UPDATE and DELETE statements.
 
-- [ ] **Step 8: Implement parseUpdate and parseDelete**
+- [ ] **Step 9: Implement parseUpdate and parseDelete**
 
-Implement remaining DML statement parsers
+Implement remaining DML statement parsers (follow similar pattern).
 
-- [ ] **Step 9: Run tests and commit**
+- [ ] **Step 10: Update parseStatement to handle DML**
+
+Update `src/parser/parser.cpp`:
+
+```cpp
+Result<std::unique_ptr<Stmt>> Parser::parseStatement() {
+    switch (current_token_.type) {
+        case TokenType::CREATE:
+            return parseCreateTable();
+        case TokenType::DROP:
+            return parseDropTable();
+        case TokenType::SELECT:
+            return parseSelect();
+        case TokenType::INSERT:
+            return parseInsert();
+        case TokenType::UPDATE:
+            return parseUpdate();
+        case TokenType::DELETE:
+            return parseDelete();
+        default:
+            return syntax_error<std::unique_ptr<Stmt>>(
+                "Unexpected token: " + token_type_name(current_token_.type));
+    }
+}
+```
+
+- [ ] **Step 11: Run tests and commit**
 
 Run: `cd build && make -j$(nproc) && ctest --output-on-failure`
 
@@ -1617,18 +1923,14 @@ Final testing and documentation updates
 **Files:**
 - Modify: `tests/unit/parser/test_parser.cpp`
 - Update: `docs/superpowers/progress.md`
-- Update: `CLimb` memory (optional)
-`CLimb` memory
-
- (system reminder about memory limits)
 
 - [ ] **Step 1: Write error handling tests**
 
 ```cpp
 TEST_CASE("Parser: Error handling", "[parser]") {
     SECTION("Syntax error location") {
-        std::string sql = "SELECT * FORM";  // Missing table name
- Lexer lexer(sql);
+        std::string sql = "SELECT * FORM";  // Missing table name (FORM instead of FROM)
+        Lexer lexer(sql);
         Parser parser(lexer);
 
         auto result = parser.parse();
@@ -1640,46 +1942,40 @@ TEST_CASE("Parser: Error handling", "[parser]") {
 
 - [ ] **Step 2: Verify error messages are descriptive**
 
-Run tests to verify error messages include location information
+Run tests to verify error messages include location information.
 
 - [ ] **Step 3: Update progress documentation**
 
 Update `docs/superpowers/progress.md`:
 
 ```markdown
-## Phase 2: SQL Parser - ✅ COMPLETE
-
-```
+## Phase 2: SQL Parser - COMPLETE
 
 **Status:** Complete
-**end date:** 2026-03-16
-**duration:** 6 days (estimated)
-
-++ hours)
+**End date:** 2026-03-16
+**Duration:** (actual duration)
 
 **Goals:**
 - [x] Implement complete SQL parser with AST generation
-- [x] Support DDL (CREATE TABLE, DROP TABLE) and DML (SELECT, INSERT, UPDATE, DELETE)
- statements
+- [x] Support DDL (CREATE TABLE, DROP TABLE) and DML (SELECT, INSERT, UPDATE, DELETE) statements
 - [x] Hand-written recursive descent parser with zero external dependencies
 - [x] Comprehensive test coverage
 - [x] Proper error handling with location information
 
- **deliverables:**
+**Deliverables:**
 - `src/parser/ast.h` - AST node definitions
 - `src/parser/ast.cpp` - AST toString implementations
 - `src/parser/parser.h` - Parser interface
 - `src/parser/parser.cpp` - Parser implementation
 - `tests/unit/parser/test_ast.cpp` - AST unit tests
 - `tests/unit/parser/test_parser.cpp` - Parser unit tests
-
 ```
 
 - [ ] **Step 4: Run final verification**
 
 Run: `cd build && make -j$(nproc) && ctest --output-on-failure`
 
-Expected: ALL tests PASS (100%+)
+Expected: ALL tests PASS
 
 - [ ] **Step 5: Final commit**
 
@@ -1688,17 +1984,14 @@ git add -A
 git commit -m "feat(parser): complete SQL parser implementation (Phase 2)
 
 - Implement full parser with AST generation
-- Support DDL: CREATE TABLE, DROP TABLE
- IF EXISTS
-
- Support DML: SELECT, INSERT, UPDATE, DELETE
- statements
+- Support DDL: CREATE TABLE, DROP TABLE IF EXISTS
+- Support DML: SELECT, INSERT, UPDATE, DELETE statements
 - Expression parsing with operator precedence
 - Comprehensive error handling with location info
 - Complete test coverage
 - Update progress documentation
 
-Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 ```
 
 ---

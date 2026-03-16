@@ -78,6 +78,53 @@ class Stmt : public ASTNode {
 class Expr : public ASTNode {
 };
 
+/// Literal expression (integer, float, string, bool, null)
+class LiteralExpr : public Expr {
+public:
+    explicit LiteralExpr(TokenValue value) : value_(std::move(value)) {}
+    LiteralExpr() : value_(std::monostate{}) {}  // Default: NULL
+
+    NodeType type() const override { return NodeType::EXPR_LITERAL; }
+    std::string toString() const override;
+
+    const TokenValue& value() const { return value_; }
+    bool isNull() const { return std::holds_alternative<std::monostate>(value_); }
+    bool isInt() const { return std::holds_alternative<int64_t>(value_); }
+    bool isFloat() const { return std::holds_alternative<double>(value_); }
+    bool isString() const { return std::holds_alternative<std::string>(value_); }
+    bool isBool() const { return std::holds_alternative<bool>(value_); }
+
+    int64_t asInt() const { return std::get<int64_t>(value_); }
+    double asFloat() const { return std::get<double>(value_); }
+    const std::string& asString() const { return std::get<std::string>(value_); }
+    bool asBool() const { return std::get<bool>(value_); }
+
+private:
+    TokenValue value_;
+};
+
+/// Column reference expression
+class ColumnRef : public Expr {
+public:
+    explicit ColumnRef(std::string column) : column_(std::move(column)) {}
+    ColumnRef(std::string table, std::string column)
+        : table_(std::move(table)), column_(std::move(column)) {}
+
+    NodeType type() const override { return NodeType::EXPR_COLUMN_REF; }
+    std::string toString() const override;
+
+    const std::string& table() const { return table_; }
+    const std::string& column() const { return column_; }
+    bool hasTableQualifier() const { return !table_.empty(); }
+    std::string fullName() const {
+        return table_.empty() ? column_ : table_ + "." + column_;
+    }
+
+private:
+    std::string table_;
+    std::string column_;
+};
+
 /// Get string name for data type
 std::string data_type_to_string(DataType type);
 

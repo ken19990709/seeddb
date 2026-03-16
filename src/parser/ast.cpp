@@ -3,6 +3,19 @@
 namespace seeddb {
 namespace parser {
 
+std::string LiteralExpr::toString() const {
+    if (isNull()) return "NULL";
+    if (isInt()) return std::to_string(asInt());
+    if (isFloat()) return std::to_string(asFloat());
+    if (isBool()) return asBool() ? "TRUE" : "FALSE";
+    if (isString()) return "'" + asString() + "'";
+    return "UNKNOWN";
+}
+
+std::string ColumnRef::toString() const {
+    return fullName();
+}
+
 std::string data_type_to_string(DataType type) {
     switch (type) {
         case DataType::INT: return "INT";
