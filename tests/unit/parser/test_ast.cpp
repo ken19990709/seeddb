@@ -65,3 +65,73 @@ TEST_CASE("AST: ColumnRef", "[ast]") {
         REQUIRE(ref.fullName() == "users.id");
     }
 }
+
+TEST_CASE("AST: BinaryExpr", "[ast]") {
+    SECTION("Arithmetic expression") {
+        auto left = std::make_unique<LiteralExpr>(TokenValue{int64_t(1)});
+        auto right = std::make_unique<LiteralExpr>(TokenValue{int64_t(2)});
+        BinaryExpr expr("+", std::move(left), std::move(right));
+
+        REQUIRE(expr.type() == NodeType::EXPR_BINARY);
+        REQUIRE(expr.op() == "+");
+        REQUIRE(expr.left() != nullptr);
+        REQUIRE(expr.right() != nullptr);
+        REQUIRE(expr.isArithmetic());
+        REQUIRE_FALSE(expr.isComparison());
+    }
+
+    SECTION("Comparison expression") {
+        auto left = std::make_unique<ColumnRef>("age");
+        auto right = std::make_unique<LiteralExpr>(TokenValue{int64_t(18)});
+        BinaryExpr expr(">", std::move(left), std::move(right));
+
+        REQUIRE(expr.isComparison());
+        REQUIRE_FALSE(expr.isArithmetic());
+    }
+
+    SECTION("Logical expression") {
+        auto left = std::make_unique<ColumnRef>("active");
+        auto right = std::make_unique<LiteralExpr>(TokenValue{true});
+        BinaryExpr expr("AND", std::move(left), std::move(right));
+
+        REQUIRE(expr.isLogical());
+    }
+}
+
+TEST_CASE("AST: UnaryExpr", "[ast]") {
+    SECTION("NOT expression") {
+        auto operand = std::make_unique<LiteralExpr>(TokenValue{true});
+        UnaryExpr expr("NOT", std::move(operand));
+
+        REQUIRE(expr.type() == NodeType::EXPR_UNARY);
+        REQUIRE(expr.op() == "NOT");
+        REQUIRE(expr.operand() != nullptr);
+        REQUIRE(expr.isNot());
+        REQUIRE_FALSE(expr.isNegation());
+    }
+
+    SECTION("Negation expression") {
+        auto operand = std::make_unique<LiteralExpr>(TokenValue{int64_t(42)});
+        UnaryExpr expr("-", std::move(operand));
+
+        REQUIRE(expr.isNegation());
+        REQUIRE_FALSE(expr.isNot());
+    }
+}
+
+TEST_CASE("AST: IsNullExpr", "[ast]") {
+    SECTION("IS NULL") {
+        auto expr = std::make_unique<ColumnRef>("email");
+        IsNullExpr is_null(std::move(expr), false);
+
+        REQUIRE(is_null.type() == NodeType::EXPR_IS_NULL);
+        REQUIRE_FALSE(is_null.isNegated());
+    }
+
+    SECTION("IS NOT NULL") {
+        auto expr = std::make_unique<ColumnRef>("phone");
+        IsNullExpr is_not_null(std::move(expr), true);
+
+        REQUIRE(is_not_null.isNegated());
+    }
+}

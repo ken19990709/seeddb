@@ -125,6 +125,71 @@ private:
     std::string column_;
 };
 
+/// Binary expression (arithmetic, comparison, logical)
+class BinaryExpr : public Expr {
+public:
+    BinaryExpr(std::string op, std::unique_ptr<Expr> left, std::unique_ptr<Expr> right)
+        : op_(std::move(op)), left_(std::move(left)), right_(std::move(right)) {}
+
+    NodeType type() const override { return NodeType::EXPR_BINARY; }
+    std::string toString() const override;
+
+    const std::string& op() const { return op_; }
+    const Expr* left() const { return left_.get(); }
+    const Expr* right() const { return right_.get(); }
+
+    bool isArithmetic() const {
+        return op_ == "+" || op_ == "-" || op_ == "*" || op_ == "/" || op_ == "%";
+    }
+    bool isComparison() const {
+        return op_ == "=" || op_ == "<>" || op_ == "<" || op_ == ">" ||
+               op_ == "<=" || op_ == ">=";
+    }
+    bool isLogical() const { return op_ == "AND" || op_ == "OR"; }
+    bool isConcat() const { return op_ == "||"; }
+
+private:
+    std::string op_;
+    std::unique_ptr<Expr> left_;
+    std::unique_ptr<Expr> right_;
+};
+
+/// Unary expression (NOT, -, +)
+class UnaryExpr : public Expr {
+public:
+    UnaryExpr(std::string op, std::unique_ptr<Expr> operand)
+        : op_(std::move(op)), operand_(std::move(operand)) {}
+
+    NodeType type() const override { return NodeType::EXPR_UNARY; }
+    std::string toString() const override;
+
+    const std::string& op() const { return op_; }
+    const Expr* operand() const { return operand_.get(); }
+    bool isNot() const { return op_ == "NOT"; }
+    bool isNegation() const { return op_ == "-"; }
+
+private:
+    std::string op_;
+    std::unique_ptr<Expr> operand_;
+};
+
+/// IS NULL expression
+class IsNullExpr : public Expr {
+public:
+    IsNullExpr(std::unique_ptr<Expr> expr, bool negated = false)
+        : expr_(std::move(expr)), negated_(negated) {}
+
+    NodeType type() const override { return NodeType::EXPR_IS_NULL; }
+    std::string toString() const override;
+
+    const Expr* expr() const { return expr_.get(); }
+    bool isNegated() const { return negated_; }
+
+private:
+    std::unique_ptr<Expr> expr_;
+    bool negated_;
+};
+
 /// Get string name for data type
 std::string data_type_to_string(DataType type);
 

@@ -16,6 +16,19 @@ std::string ColumnRef::toString() const {
     return fullName();
 }
 
+std::string BinaryExpr::toString() const {
+    return "(" + (left_ ? left_->toString() : "null") + " " + op_ + " " +
+           (right_ ? right_->toString() : "null") + ")";
+}
+
+std::string UnaryExpr::toString() const {
+    return op_ + "(" + (operand_ ? operand_->toString() : "null") + ")";
+}
+
+std::string IsNullExpr::toString() const {
+    return (expr_ ? expr_->toString() : "null") + (negated_ ? " IS NOT NULL" : " IS NULL");
+}
+
 std::string data_type_to_string(DataType type) {
     switch (type) {
         case DataType::INT: return "INT";
