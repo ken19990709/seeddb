@@ -23,4 +23,5 @@ target_sources(seeddb_tests
         unit/common/test_config.cpp
         unit/parser/test_lexer.cpp
         unit/parser/test_ast.cpp
+        unit/parser/test_parser.cpp
 )
