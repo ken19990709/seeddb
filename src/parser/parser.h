@@ -80,10 +80,21 @@ private:
     Result<std::unique_ptr<ColumnDef>> parseColumnDef();
     Result<DataTypeInfo> parseDataType();
 
-    // Error helper
+    // Error helper with location info
     template<typename T>
     Result<T> syntax_error(const std::string& message) const {
-        return Result<T>::err(ErrorCode::SYNTAX_ERROR, message);
+        std::string full_msg = current_token_.loc.to_string() + ": " + message;
+        return Result<T>::err(ErrorCode::SYNTAX_ERROR, full_msg);
+    }
+
+    // Helper to convert specific statement type to Stmt base
+    template<typename StmtT>
+    Result<std::unique_ptr<Stmt>> wrapStatement(Result<std::unique_ptr<StmtT>> result) {
+        if (!result.is_ok()) {
+            return Result<std::unique_ptr<Stmt>>::err(result.error());
+        }
+        return Result<std::unique_ptr<Stmt>>::ok(
+            std::unique_ptr<Stmt>(result.value().release()));
     }
 };
 

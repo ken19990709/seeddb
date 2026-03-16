@@ -66,54 +66,18 @@ Result<std::unique_ptr<Stmt>> Parser::parse() {
 
 Result<std::unique_ptr<Stmt>> Parser::parseStatement() {
     switch (current_token_.type) {
-        case TokenType::CREATE: {
-            auto result = parseCreateTable();
-            if (!result.is_ok()) {
-                return Result<std::unique_ptr<Stmt>>::err(result.error());
-            }
-            return Result<std::unique_ptr<Stmt>>::ok(
-                std::unique_ptr<Stmt>(result.value().release()));
-        }
-        case TokenType::DROP: {
-            auto result = parseDropTable();
-            if (!result.is_ok()) {
-                return Result<std::unique_ptr<Stmt>>::err(result.error());
-            }
-            return Result<std::unique_ptr<Stmt>>::ok(
-                std::unique_ptr<Stmt>(result.value().release()));
-        }
-        case TokenType::SELECT: {
-            auto result = parseSelect();
-            if (!result.is_ok()) {
-                return Result<std::unique_ptr<Stmt>>::err(result.error());
-            }
-            return Result<std::unique_ptr<Stmt>>::ok(
-                std::unique_ptr<Stmt>(result.value().release()));
-        }
-        case TokenType::INSERT: {
-            auto result = parseInsert();
-            if (!result.is_ok()) {
-                return Result<std::unique_ptr<Stmt>>::err(result.error());
-            }
-            return Result<std::unique_ptr<Stmt>>::ok(
-                std::unique_ptr<Stmt>(result.value().release()));
-        }
-        case TokenType::UPDATE: {
-            auto result = parseUpdate();
-            if (!result.is_ok()) {
-                return Result<std::unique_ptr<Stmt>>::err(result.error());
-            }
-            return Result<std::unique_ptr<Stmt>>::ok(
-                std::unique_ptr<Stmt>(result.value().release()));
-        }
-        case TokenType::DELETE: {
-            auto result = parseDelete();
-            if (!result.is_ok()) {
-                return Result<std::unique_ptr<Stmt>>::err(result.error());
-            }
-            return Result<std::unique_ptr<Stmt>>::ok(
-                std::unique_ptr<Stmt>(result.value().release()));
-        }
+        case TokenType::CREATE:
+            return wrapStatement(parseCreateTable());
+        case TokenType::DROP:
+            return wrapStatement(parseDropTable());
+        case TokenType::SELECT:
+            return wrapStatement(parseSelect());
+        case TokenType::INSERT:
+            return wrapStatement(parseInsert());
+        case TokenType::UPDATE:
+            return wrapStatement(parseUpdate());
+        case TokenType::DELETE:
+            return wrapStatement(parseDelete());
         default:
             return syntax_error<std::unique_ptr<Stmt>>(
                 "Unexpected token: " + std::string(token_type_name(current_token_.type)));
@@ -135,7 +99,7 @@ Result<std::unique_ptr<CreateTableStmt>> Parser::parseCreateTable() {
     if (!check(TokenType::IDENTIFIER)) {
         return syntax_error<std::unique_ptr<CreateTableStmt>>("Expected table name");
     }
-    std::string table_name = std::get<std::string>(current_token_.value);
+    std::string table_name = std::move(std::get<std::string>(current_token_.value));
     consume();
 
     // Expect (
@@ -185,7 +149,7 @@ Result<std::unique_ptr<DropTableStmt>> Parser::parseDropTable() {
     if (!check(TokenType::IDENTIFIER)) {
         return syntax_error<std::unique_ptr<DropTableStmt>>("Expected table name");
     }
-    std::string name = std::get<std::string>(current_token_.value);
+    std::string name = std::move(std::get<std::string>(current_token_.value));
     consume();
 
     return Result<std::unique_ptr<DropTableStmt>>::ok(
@@ -220,7 +184,7 @@ Result<std::unique_ptr<ColumnDef>> Parser::parseColumnDef() {
     if (!check(TokenType::IDENTIFIER)) {
         return syntax_error<std::unique_ptr<ColumnDef>>("Expected column name");
     }
-    std::string name = std::get<std::string>(current_token_.value);
+    std::string name = std::move(std::get<std::string>(current_token_.value));
     consume();
 
     // Data type
@@ -683,22 +647,19 @@ Result<std::unique_ptr<TableRef>> Parser::parseTableRef() {
     if (!check(TokenType::IDENTIFIER)) {
         return syntax_error<std::unique_ptr<TableRef>>("Expected table name");
     }
-    std::string name = std::get<std::string>(current_token_.value);
+    std::string name = std::move(std::get<std::string>(current_token_.value));
     consume();
 
-    // Optional alias
+    // Optional alias - TableRef constructor handles empty alias
     std::string alias;
     if (match(TokenType::AS)) {
         if (!check(TokenType::IDENTIFIER)) {
             return syntax_error<std::unique_ptr<TableRef>>("Expected alias after AS");
         }
-        alias = std::get<std::string>(current_token_.value);
+        alias = std::move(std::get<std::string>(current_token_.value));
         consume();
     }
 
-    if (alias.empty()) {
-        return Result<std::unique_ptr<TableRef>>::ok(std::make_unique<TableRef>(std::move(name)));
-    }
     return Result<std::unique_ptr<TableRef>>::ok(
         std::make_unique<TableRef>(std::move(name), std::move(alias)));
 }
