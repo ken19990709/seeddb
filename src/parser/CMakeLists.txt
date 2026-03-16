@@ -1,6 +1,7 @@
 # SQL Parser library
 add_library(seeddb_parser STATIC
     lexer.cpp
+    ast.cpp
 )
 
 target_include_directories(seeddb_parser
