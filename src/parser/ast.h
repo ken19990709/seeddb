@@ -190,6 +190,171 @@ private:
     bool negated_;
 };
 
+/// Column definition
+class ColumnDef : public ASTNode {
+public:
+    ColumnDef(std::string name, DataTypeInfo data_type)
+        : name_(std::move(name)), data_type_(std::move(data_type)) {}
+
+    NodeType type() const override { return NodeType::COLUMN_DEF; }
+    std::string toString() const override;
+
+    const std::string& name() const { return name_; }
+    const DataTypeInfo& dataType() const { return data_type_; }
+    bool has_length() const { return data_type_.has_length(); }
+    bool isNullable() const { return nullable_; }
+    void setNullable(bool nullable) { nullable_ = nullable; }
+
+private:
+    std::string name_;
+    DataTypeInfo data_type_;
+    bool nullable_ = true;
+};
+
+/// Table reference
+class TableRef : public ASTNode {
+public:
+    explicit TableRef(std::string name) : name_(std::move(name)) {}
+    TableRef(std::string name, std::string alias)
+        : name_(std::move(name)), alias_(std::move(alias)) {}
+
+    NodeType type() const override { return NodeType::TABLE_REF; }
+    std::string toString() const override;
+
+    const std::string& name() const { return name_; }
+    const std::string& alias() const { return alias_; }
+    bool hasAlias() const { return !alias_.empty(); }
+
+private:
+    std::string name_;
+    std::string alias_;
+};
+
+/// CREATE TABLE statement
+class CreateTableStmt : public Stmt {
+public:
+    explicit CreateTableStmt(std::string table_name) : table_name_(std::move(table_name)) {}
+
+    NodeType type() const override { return NodeType::STMT_CREATE_TABLE; }
+    std::string toString() const override;
+
+    const std::string& tableName() const { return table_name_; }
+    const auto& columns() const { return columns_; }
+
+    void addColumn(std::unique_ptr<ColumnDef> col) {
+        columns_.push_back(std::move(col));
+    }
+
+private:
+    std::string table_name_;
+    std::vector<std::unique_ptr<ColumnDef>> columns_;
+};
+
+/// DROP TABLE statement
+class DropTableStmt : public Stmt {
+public:
+    DropTableStmt(std::string table_name, bool if_exists = false)
+        : table_name_(std::move(table_name)), if_exists_(if_exists) {}
+
+    NodeType type() const override { return NodeType::STMT_DROP_TABLE; }
+    std::string toString() const override;
+
+    const std::string& tableName() const { return table_name_; }
+    bool hasIfExists() const { return if_exists_; }
+
+private:
+    std::string table_name_;
+    bool if_exists_;
+};
+
+/// SELECT statement
+class SelectStmt : public Stmt {
+public:
+    NodeType type() const override { return NodeType::STMT_SELECT; }
+    std::string toString() const override;
+
+    bool isSelectAll() const { return select_all_; }
+    const auto& columns() const { return columns_; }
+    const TableRef* fromTable() const { return from_table_.get(); }
+    const Expr* whereClause() const { return where_clause_.get(); }
+    bool hasWhere() const { return where_clause_ != nullptr; }
+
+    void setSelectAll(bool all) { select_all_ = all; }
+    void addColumn(std::unique_ptr<Expr> col) { columns_.push_back(std::move(col)); }
+    void setFromTable(std::unique_ptr<TableRef> table) { from_table_ = std::move(table); }
+    void setWhere(std::unique_ptr<Expr> where) { where_clause_ = std::move(where); }
+
+private:
+    bool select_all_ = false;
+    std::vector<std::unique_ptr<Expr>> columns_;
+    std::unique_ptr<TableRef> from_table_;
+    std::unique_ptr<Expr> where_clause_;
+};
+
+/// INSERT statement
+class InsertStmt : public Stmt {
+public:
+    explicit InsertStmt(std::string table_name) : table_name_(std::move(table_name)) {}
+
+    NodeType type() const override { return NodeType::STMT_INSERT; }
+    std::string toString() const override;
+
+    const std::string& tableName() const { return table_name_; }
+    const auto& columns() const { return columns_; }
+    const auto& values() const { return values_; }
+
+    void addColumn(std::string col) { columns_.push_back(std::move(col)); }
+    void addValues(std::unique_ptr<Expr> val) { values_.push_back(std::move(val)); }
+
+private:
+    std::string table_name_;
+    std::vector<std::string> columns_;
+    std::vector<std::unique_ptr<Expr>> values_;
+};
+
+/// UPDATE statement
+class UpdateStmt : public Stmt {
+public:
+    explicit UpdateStmt(std::string table_name) : table_name_(std::move(table_name)) {}
+
+    NodeType type() const override { return NodeType::STMT_UPDATE; }
+    std::string toString() const override;
+
+    const std::string& tableName() const { return table_name_; }
+    const auto& assignments() const { return assignments_; }
+    const Expr* whereClause() const { return where_clause_.get(); }
+    bool hasWhere() const { return where_clause_ != nullptr; }
+
+    void addAssignment(std::string column, std::unique_ptr<Expr> value) {
+        assignments_.emplace_back(std::move(column), std::move(value));
+    }
+    void setWhere(std::unique_ptr<Expr> where) { where_clause_ = std::move(where); }
+
+private:
+    std::string table_name_;
+    std::vector<std::pair<std::string, std::unique_ptr<Expr>>> assignments_;
+    std::unique_ptr<Expr> where_clause_;
+};
+
+/// DELETE statement
+class DeleteStmt : public Stmt {
+public:
+    explicit DeleteStmt(std::string table_name) : table_name_(std::move(table_name)) {}
+
+    NodeType type() const override { return NodeType::STMT_DELETE; }
+    std::string toString() const override;
+
+    const std::string& tableName() const { return table_name_; }
+    const Expr* whereClause() const { return where_clause_.get(); }
+    bool hasWhere() const { return where_clause_ != nullptr; }
+
+    void setWhere(std::unique_ptr<Expr> where) { where_clause_ = std::move(where); }
+
+private:
+    std::string table_name_;
+    std::unique_ptr<Expr> where_clause_;
+};
+
 /// Get string name for data type
 std::string data_type_to_string(DataType type);
 

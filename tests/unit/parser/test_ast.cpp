@@ -135,3 +135,173 @@ TEST_CASE("AST: IsNullExpr", "[ast]") {
         REQUIRE(is_not_null.isNegated());
     }
 }
+
+// ===== Statement Nodes Tests =====
+
+TEST_CASE("AST: CreateTableStmt", "[ast]") {
+    SECTION("Basic table creation") {
+        CreateTableStmt stmt("users");
+
+        REQUIRE(stmt.type() == NodeType::STMT_CREATE_TABLE);
+        REQUIRE(stmt.tableName() == "users");
+        REQUIRE(stmt.columns().empty());
+    }
+
+    SECTION("Table with columns") {
+        CreateTableStmt stmt("users");
+
+        auto col1 = std::make_unique<ColumnDef>("id", DataTypeInfo(DataType::INT));
+        col1->setNullable(false);
+        stmt.addColumn(std::move(col1));
+
+        auto col2 = std::make_unique<ColumnDef>("name", DataTypeInfo(DataType::VARCHAR, 255));
+        stmt.addColumn(std::move(col2));
+
+        REQUIRE(stmt.columns().size() == 2);
+        REQUIRE_FALSE(stmt.columns()[0]->isNullable());
+        REQUIRE(stmt.columns()[1]->has_length());
+    }
+}
+
+TEST_CASE("AST: ColumnDef", "[ast]") {
+    SECTION("Simple column") {
+        ColumnDef col("id", DataTypeInfo(DataType::INT));
+        REQUIRE(col.type() == NodeType::COLUMN_DEF);
+        REQUIRE(col.name() == "id");
+        REQUIRE(col.dataType().base_type_ == DataType::INT);
+        REQUIRE(col.isNullable());  // Default nullable
+    }
+
+    SECTION("VARCHAR with length") {
+        ColumnDef col("name", DataTypeInfo(DataType::VARCHAR, 100));
+        REQUIRE(col.dataType().has_length());
+        REQUIRE(col.dataType().length() == 100);
+    }
+
+    SECTION("NOT NULL column") {
+        ColumnDef col("id", DataTypeInfo(DataType::INT));
+        col.setNullable(false);
+        REQUIRE_FALSE(col.isNullable());
+    }
+}
+
+TEST_CASE("AST: DropTableStmt", "[ast]") {
+    SECTION("DROP TABLE") {
+        DropTableStmt stmt("old_table");
+        REQUIRE(stmt.type() == NodeType::STMT_DROP_TABLE);
+        REQUIRE(stmt.tableName() == "old_table");
+        REQUIRE_FALSE(stmt.hasIfExists());
+    }
+
+    SECTION("DROP TABLE IF EXISTS") {
+        DropTableStmt stmt("old_table", true);
+        REQUIRE(stmt.hasIfExists());
+    }
+}
+
+TEST_CASE("AST: TableRef", "[ast]") {
+    SECTION("Simple table reference") {
+        TableRef ref("users");
+        REQUIRE(ref.type() == NodeType::TABLE_REF);
+        REQUIRE(ref.name() == "users");
+        REQUIRE_FALSE(ref.hasAlias());
+    }
+
+    SECTION("Table with alias") {
+        TableRef ref("users", "u");
+        REQUIRE(ref.hasAlias());
+        REQUIRE(ref.alias() == "u");
+    }
+}
+
+TEST_CASE("AST: SelectStmt", "[ast]") {
+    SECTION("SELECT *") {
+        SelectStmt stmt;
+        stmt.setSelectAll(true);
+
+        REQUIRE(stmt.type() == NodeType::STMT_SELECT);
+        REQUIRE(stmt.isSelectAll());
+        REQUIRE_FALSE(stmt.hasWhere());
+    }
+
+    SECTION("SELECT with FROM and WHERE") {
+        SelectStmt stmt;
+        stmt.setSelectAll(true);
+        stmt.setFromTable(std::make_unique<TableRef>("users"));
+
+        auto where = std::make_unique<BinaryExpr>(
+            "=",
+            std::make_unique<ColumnRef>("id"),
+            std::make_unique<LiteralExpr>(TokenValue{int64_t(1)})
+        );
+        stmt.setWhere(std::move(where));
+
+        REQUIRE(stmt.fromTable() != nullptr);
+        REQUIRE(stmt.hasWhere());
+    }
+}
+
+TEST_CASE("AST: InsertStmt", "[ast]") {
+    SECTION("Basic INSERT") {
+        InsertStmt stmt("users");
+        REQUIRE(stmt.type() == NodeType::STMT_INSERT);
+        REQUIRE(stmt.tableName() == "users");
+        REQUIRE(stmt.columns().empty());
+        REQUIRE(stmt.values().empty());
+    }
+
+    SECTION("INSERT with columns and values") {
+        InsertStmt stmt("users");
+        stmt.addColumn("name");
+        stmt.addValues(std::make_unique<LiteralExpr>(TokenValue{std::string("John")}));
+
+        REQUIRE(stmt.columns().size() == 1);
+        REQUIRE(stmt.values().size() == 1);
+    }
+}
+
+TEST_CASE("AST: UpdateStmt", "[ast]") {
+    SECTION("Basic UPDATE") {
+        UpdateStmt stmt("users");
+        REQUIRE(stmt.type() == NodeType::STMT_UPDATE);
+        REQUIRE(stmt.tableName() == "users");
+        REQUIRE_FALSE(stmt.hasWhere());
+    }
+
+    SECTION("UPDATE with SET and WHERE") {
+        UpdateStmt stmt("users");
+        stmt.addAssignment("name", std::make_unique<LiteralExpr>(TokenValue{std::string("Jane")}));
+
+        auto where = std::make_unique<BinaryExpr>(
+            "=",
+            std::make_unique<ColumnRef>("id"),
+            std::make_unique<LiteralExpr>(TokenValue{int64_t(1)})
+        );
+        stmt.setWhere(std::move(where));
+
+        REQUIRE(stmt.assignments().size() == 1);
+        REQUIRE(stmt.hasWhere());
+    }
+}
+
+TEST_CASE("AST: DeleteStmt", "[ast]") {
+    SECTION("Basic DELETE") {
+        DeleteStmt stmt("users");
+        REQUIRE(stmt.type() == NodeType::STMT_DELETE);
+        REQUIRE(stmt.tableName() == "users");
+        REQUIRE_FALSE(stmt.hasWhere());
+    }
+
+    SECTION("DELETE with WHERE") {
+        DeleteStmt stmt("users");
+
+        auto where = std::make_unique<BinaryExpr>(
+            "=",
+            std::make_unique<ColumnRef>("id"),
+            std::make_unique<LiteralExpr>(TokenValue{int64_t(1)})
+        );
+        stmt.setWhere(std::move(where));
+
+        REQUIRE(stmt.hasWhere());
+    }
+}
