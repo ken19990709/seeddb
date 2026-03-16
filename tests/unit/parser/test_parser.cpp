@@ -58,3 +58,68 @@ TEST_CASE("Parser: has_more", "[parser]") {
     parser.consume();
     REQUIRE_FALSE(parser.has_more());
 }
+
+// ===== DDL Statement Tests =====
+
+TEST_CASE("Parser: CREATE TABLE", "[parser]") {
+    SECTION("Basic CREATE TABLE") {
+        std::string sql = "CREATE TABLE users (id INT, name TEXT)";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_CREATE_TABLE);
+
+        auto* create = static_cast<CreateTableStmt*>(stmt.get());
+        REQUIRE(create->tableName() == "users");
+        REQUIRE(create->columns().size() == 2);
+    }
+
+    SECTION("CREATE TABLE with various types") {
+        std::string sql = "CREATE TABLE products (id INT NOT NULL, price FLOAT, name VARCHAR(100))";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* create = static_cast<CreateTableStmt*>(result.value().get());
+        REQUIRE(create->columns().size() == 3);
+        REQUIRE_FALSE(create->columns()[0]->isNullable());  // id NOT NULL
+        REQUIRE(create->columns()[1]->isNullable());  // price (default nullable)
+        REQUIRE(create->columns()[2]->dataType().has_length());  // VARCHAR(100)
+    }
+}
+
+TEST_CASE("Parser: DROP TABLE", "[parser]") {
+    SECTION("Basic DROP TABLE") {
+        std::string sql = "DROP TABLE users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_DROP_TABLE);
+
+        auto* drop = static_cast<DropTableStmt*>(stmt.get());
+        REQUIRE(drop->tableName() == "users");
+        REQUIRE_FALSE(drop->hasIfExists());
+    }
+
+    SECTION("DROP TABLE IF EXISTS") {
+        std::string sql = "DROP TABLE IF EXISTS old_table";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* drop = static_cast<DropTableStmt*>(result.value().get());
+        REQUIRE(drop->hasIfExists());
+    }
+}

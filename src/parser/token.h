@@ -23,10 +23,10 @@ enum class TokenType {
     GROUP, BY, ORDER, ASC, DESC, HAVING,
 
     // ===== Subquery support =====
-    EXISTS, IN, BETWEEN, LIKE, IS, AS,
+    EXISTS, IN, BETWEEN, LIKE, IS, AS, IF,
 
     // ===== Data types =====
-    INTEGER, BIGINT, SMALLINT, FLOAT, DOUBLE, VARCHAR, CHAR, BOOLEAN,
+    INTEGER, BIGINT, SMALLINT, FLOAT, DOUBLE, VARCHAR, CHAR, TEXT, BOOLEAN,
 
     // ===== Constraints =====
     PRIMARY, KEY, FOREIGN, REFERENCES, UNIQUE, NOT, NULL_LIT, DEFAULT,

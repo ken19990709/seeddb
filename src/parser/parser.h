@@ -49,6 +49,22 @@ private:
 
     /// Advance to next token from lexer
     void advance();
+
+    // Statement parsing
+    Result<std::unique_ptr<Stmt>> parseStatement();
+    Result<std::unique_ptr<CreateTableStmt>> parseCreateTable();
+    Result<std::unique_ptr<DropTableStmt>> parseDropTable();
+
+    // Column parsing
+    Result<std::vector<std::unique_ptr<ColumnDef>>> parseColumnDefList();
+    Result<std::unique_ptr<ColumnDef>> parseColumnDef();
+    Result<DataTypeInfo> parseDataType();
+
+    // Error helper
+    template<typename T>
+    Result<T> syntax_error(const std::string& message) const {
+        return Result<T>::err(ErrorCode::SYNTAX_ERROR, message);
+    }
 };
 
 } // namespace parser

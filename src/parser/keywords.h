@@ -55,6 +55,7 @@ inline const std::unordered_map<std::string_view, TokenType> keywords = {
     {"LIKE", TokenType::LIKE},
     {"IS", TokenType::IS},
     {"AS", TokenType::AS},
+    {"IF", TokenType::IF},
 
     // Data types
     {"INTEGER", TokenType::INTEGER},
@@ -65,6 +66,7 @@ inline const std::unordered_map<std::string_view, TokenType> keywords = {
     {"DOUBLE", TokenType::DOUBLE},
     {"VARCHAR", TokenType::VARCHAR},
     {"CHAR", TokenType::CHAR},
+    {"TEXT", TokenType::TEXT},
     {"BOOLEAN", TokenType::BOOLEAN},
     {"BOOL", TokenType::BOOLEAN},  // Alias
 

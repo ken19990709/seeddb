@@ -49,6 +49,7 @@ const char* token_type_name(TokenType type) {
         case TokenType::LIKE: return "LIKE";
         case TokenType::IS: return "IS";
         case TokenType::AS: return "AS";
+        case TokenType::IF: return "IF";
 
         case TokenType::INTEGER: return "INTEGER";
         case TokenType::BIGINT: return "BIGINT";
@@ -57,6 +58,7 @@ const char* token_type_name(TokenType type) {
         case TokenType::DOUBLE: return "DOUBLE";
         case TokenType::VARCHAR: return "VARCHAR";
         case TokenType::CHAR: return "CHAR";
+        case TokenType::TEXT: return "TEXT";
         case TokenType::BOOLEAN: return "BOOLEAN";
 
         case TokenType::PRIMARY: return "PRIMARY";
