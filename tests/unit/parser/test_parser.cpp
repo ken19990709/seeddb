@@ -123,3 +123,167 @@ TEST_CASE("Parser: DROP TABLE", "[parser]") {
         REQUIRE(drop->hasIfExists());
     }
 }
+
+// ===== DML Statement Tests =====
+
+TEST_CASE("Parser: SELECT", "[parser]") {
+    SECTION("SELECT *") {
+        std::string sql = "SELECT * FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_SELECT);
+
+        auto* select = static_cast<SelectStmt*>(stmt.get());
+        REQUIRE(select->isSelectAll());
+        REQUIRE(select->fromTable()->name() == "users");
+    }
+
+    SECTION("SELECT with columns") {
+        std::string sql = "SELECT id, name FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE_FALSE(select->isSelectAll());
+        REQUIRE(select->columns().size() == 2);
+    }
+
+    SECTION("SELECT with WHERE") {
+        std::string sql = "SELECT id, name FROM users WHERE age > 18";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE_FALSE(select->isSelectAll());
+        REQUIRE(select->columns().size() == 2);
+        REQUIRE(select->hasWhere());
+    }
+
+    SECTION("SELECT with complex WHERE") {
+        std::string sql = "SELECT * FROM users WHERE age > 18 AND status = 'active'";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+    }
+}
+
+TEST_CASE("Parser: INSERT", "[parser]") {
+    SECTION("INSERT with values") {
+        std::string sql = "INSERT INTO users (id, name) VALUES (1, 'Alice')";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_INSERT);
+
+        auto* insert = static_cast<InsertStmt*>(stmt.get());
+        REQUIRE(insert->tableName() == "users");
+        REQUIRE(insert->columns().size() == 2);
+        REQUIRE(insert->values().size() == 2);
+    }
+}
+
+TEST_CASE("Parser: UPDATE", "[parser]") {
+    SECTION("UPDATE with SET") {
+        std::string sql = "UPDATE users SET name = 'Bob' WHERE id = 1";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_UPDATE);
+
+        auto* update = static_cast<UpdateStmt*>(stmt.get());
+        REQUIRE(update->tableName() == "users");
+        REQUIRE(update->assignments().size() == 1);
+        REQUIRE(update->hasWhere());
+    }
+}
+
+TEST_CASE("Parser: DELETE", "[parser]") {
+    SECTION("DELETE with WHERE") {
+        std::string sql = "DELETE FROM users WHERE id = 1";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_DELETE);
+
+        auto* del = static_cast<DeleteStmt*>(stmt.get());
+        REQUIRE(del->tableName() == "users");
+        REQUIRE(del->hasWhere());
+    }
+}
+
+// ===== Expression Parsing Tests =====
+
+TEST_CASE("Parser: Expressions", "[parser]") {
+    SECTION("Arithmetic expressions") {
+        std::string sql = "SELECT * FROM t WHERE a + b * c > 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("Comparison expressions") {
+        std::string sql = "SELECT * FROM t WHERE a = 1 AND b <> 2";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("Logical expressions") {
+        std::string sql = "SELECT * FROM t WHERE a OR b AND c";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("NOT expression") {
+        std::string sql = "SELECT * FROM t WHERE NOT a = 1";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("Parenthesized expressions") {
+        std::string sql = "SELECT * FROM t WHERE (a OR b) AND c";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+}

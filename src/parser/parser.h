@@ -55,6 +55,26 @@ private:
     Result<std::unique_ptr<CreateTableStmt>> parseCreateTable();
     Result<std::unique_ptr<DropTableStmt>> parseDropTable();
 
+    // DML statement parsing
+    Result<std::unique_ptr<SelectStmt>> parseSelect();
+    Result<std::unique_ptr<InsertStmt>> parseInsert();
+    Result<std::unique_ptr<UpdateStmt>> parseUpdate();
+    Result<std::unique_ptr<DeleteStmt>> parseDelete();
+
+    // Expression parsing
+    Result<std::unique_ptr<Expr>> parseExpression();
+    Result<std::unique_ptr<Expr>> parseOrExpr();
+    Result<std::unique_ptr<Expr>> parseAndExpr();
+    Result<std::unique_ptr<Expr>> parseNotExpr();
+    Result<std::unique_ptr<Expr>> parseComparisonExpr();
+    Result<std::unique_ptr<Expr>> parseAdditiveExpr();
+    Result<std::unique_ptr<Expr>> parseMultiplicativeExpr();
+    Result<std::unique_ptr<Expr>> parseUnaryExpr();
+    Result<std::unique_ptr<Expr>> parsePrimaryExpr();
+
+    // Table reference
+    Result<std::unique_ptr<TableRef>> parseTableRef();
+
     // Column parsing
     Result<std::vector<std::unique_ptr<ColumnDef>>> parseColumnDefList();
     Result<std::unique_ptr<ColumnDef>> parseColumnDef();
