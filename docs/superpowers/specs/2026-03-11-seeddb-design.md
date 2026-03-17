@@ -410,6 +410,7 @@ private:
 - 字符串使用单独成员 `str_val_`，因为 `std::string` 有构造/析构函数
 - 类型比较需要先检查 `LogicalTypeId` 是否兼容
 - 预留 `equals`/`lessThan` 方法，为后续 WHERE 子句求值做准备
+- **与 parser::DataType 的关系**: Parser 的 `DataType` 用于 AST 阶段，`LogicalType` 用于执行阶段。Executor 负责将 `DataType` 转换为 `LogicalType`
 
 ##### 1.3.4 Row 类
 
@@ -476,7 +477,7 @@ public:
 
     // 查找
     bool hasColumn(const std::string& name) const;
-    size_t columnIndex(const std::string& name) const;  // 找不到返回 -1 或抛异常
+    std::optional<size_t> columnIndex(const std::string& name) const;  // 找不到返回 nullopt
 
     // 验证
     bool validateRow(const Row& row) const;  // 检查列数、类型兼容性
@@ -511,7 +512,7 @@ public:
 
     // 数据操作
     void insert(Row row);
-    bool remove(size_t idx);  // 返回是否成功
+    bool remove(size_t idx);  // 返回是否成功；注意：索引删除会影响后续索引
     void update(size_t idx, Row row);
 
     // 访问
@@ -582,17 +583,19 @@ public:
     enum class Status { OK, ERROR, EMPTY };
 
     static ExecutionResult ok(Row row);
-    static ExecutionResult error(std::string message);
+    static ExecutionResult error(ErrorCode code, std::string message);  // 使用现有 ErrorCode
     static ExecutionResult empty();
 
     Status status() const;
     const Row& row() const;
+    ErrorCode errorCode() const;       // 错误码
     const std::string& errorMessage() const;
     bool hasRow() const;
 
 private:
     Status status_;
     std::optional<Row> row_;
+    ErrorCode error_code_ = ErrorCode::OK;  // 默认 OK
     std::string error_message_;
 };
 
@@ -614,6 +617,7 @@ public:
     /// 迭代查询结果（SELECT 后调用）
     bool hasNext();
     ExecutionResult next();
+    void resetQuery();  // 重置查询状态，准备新查询
 
 private:
     Catalog& catalog_;
