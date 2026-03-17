@@ -262,54 +262,412 @@ seeddb/
 
 **里程碑验证**：Lexer 能正确解析 `SELECT * FROM users WHERE id = 1` ✅
 
-#### 1.2 语法分析器（2 周）
+#### 1.2 语法分析器（2 周）✅ 已完成
+
+> **完成日期**: 2026-03-17
+
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| P1-1 AST 节点基类定义 | 0.5 天 | `ASTNode` 基类 + `toString()` 方法 | ✅ |
+| P1-2 CREATE TABLE AST | 1 天 | 解析 `CREATE TABLE t (a INT, b VARCHAR(10))` | ✅ |
+| P1-3 DROP TABLE AST | 0.5 天 | 解析 `DROP TABLE t` | ✅ |
+| P1-4 INSERT AST | 1 天 | 解析 `INSERT INTO t VALUES (1, 'a')` | ✅ |
+| P1-5 SELECT 基础 AST | 1 天 | 解析 `SELECT a, b FROM t` | ✅ |
+| P1-6 SELECT + WHERE AST | 1 天 | 解析 `SELECT * FROM t WHERE a > 1` | ✅ |
+| P1-7 UPDATE AST | 1 天 | 解析 `UPDATE t SET a = 1 WHERE b = 2` | ✅ |
+| P1-8 DELETE AST | 0.5 天 | 解析 `DELETE FROM t WHERE a = 1` | ✅ |
+| P1-9 表达式 AST | 1 天 | 解析 `a + b * 2`, `a IS NULL`, `a AND b` | ✅ |
+| P1-10 Parser 单元测试 | 1 天 | 所有 SQL 语句解析测试通过 | ✅ |
+
+**里程碑验证**：Parser 能正确解析所有基础 SQL 并生成 AST ✅
+
+#### 1.3 内存存储层 + 1.4 执行引擎（合并实现）
+
+> **设计日期**: 2026-03-17
+> **设计原则**: Iterator 执行模型 + 向量化预留 + DuckDB 风格类型系统
+
+##### 1.3.1 架构概览
+
+```
+src/
+├── common/
+│   ├── logical_type.h      # LogicalType, LogicalTypeId
+│   └── value.h             # Value 类
+├── storage/
+│   ├── row.h               # Row 类
+│   ├── schema.h            # ColumnSchema, Schema
+│   ├── table.h             # Table 类
+│   └── catalog.h           # Catalog 类
+└── executor/
+    └── executor.h          # ExecutionResult, Executor
+
+tests/unit/
+├── common/
+│   ├── test_types.cpp      # 扩展：加入 LogicalType 测试
+│   └── test_value.cpp      # 新增：Value + Row 合并测试
+└── storage/
+    ├── test_storage.cpp    # 新增：Schema + Table + Catalog 合并测试
+    └── test_executor.cpp   # 新增：Executor 测试
+```
+
+**依赖关系**:
+```
+LogicalType  ←  Value  ←  Row
+                      ↓
+                   Schema  ←  Table  ←  Catalog
+                                          ↓
+AST (parser)  ←─────────────────────── Executor
+```
+
+##### 1.3.2 类型系统 (LogicalType)
+
+```cpp
+// src/common/logical_type.h
+
+enum class LogicalTypeId {
+    SQL_NULL,
+    INTEGER,    // int32_t
+    BIGINT,     // int64_t
+    FLOAT,      // float
+    DOUBLE,     // double
+    VARCHAR,    // std::string
+    BOOLEAN,    // bool
+    // Future: DATE, TIMESTAMP, DECIMAL
+};
+
+class LogicalType {
+public:
+    explicit LogicalType(LogicalTypeId id = LogicalTypeId::SQL_NULL);
+    LogicalTypeId id() const;
+
+    bool isNumeric() const;
+    bool isInteger() const;
+    bool isFloating() const;
+    bool isString() const;
+    size_t fixedSize() const;  // 固定类型返回字节大小，变长返回0
+
+private:
+    LogicalTypeId id_;
+};
+```
+
+**设计要点**:
+- 区分数据库类型（INTEGER, DATE）与 C++ 存储类型（int32_t）
+- 为未来扩展预留空间（DATE, TIMESTAMP, DECIMAL）
+
+##### 1.3.3 Value 类
+
+```cpp
+// src/common/value.h
+
+class Value {
+public:
+    // 构造
+    Value();  // 默认 NULL
+    static Value null();
+    static Value integer(int32_t v);
+    static Value bigint(int64_t v);
+    static Value Float(float v);      // 避免与宏冲突
+    static Value Double(double v);
+    static Value varchar(std::string v);
+    static Value boolean(bool v);
+
+    // 类型查询
+    const LogicalType& type() const;
+    LogicalTypeId typeId() const;
+    bool isNull() const;
+
+    // 值访问（非 NULL 时调用）
+    int32_t asInt32() const;
+    int64_t asInt64() const;
+    float asFloat() const;
+    double asDouble() const;
+    const std::string& asString() const;
+    bool asBool() const;
+
+    // 比较
+    bool equals(const Value& other) const;
+    bool lessThan(const Value& other) const;
+
+    // 字符串表示（调试用）
+    std::string toString() const;
+
+private:
+    LogicalType type_;
+    bool is_null_ = true;
+    union Storage {
+        int32_t int32_val;
+        int64_t int64_val;
+        float float_val;
+        double double_val;
+        bool bool_val;
+    } storage_;
+    std::string str_val_;  // 字符串单独处理，不放在 union
+};
+```
+
+**设计要点**:
+- 字符串使用单独成员 `str_val_`，因为 `std::string` 有构造/析构函数
+- 类型比较需要先检查 `LogicalTypeId` 是否兼容
+- 预留 `equals`/`lessThan` 方法，为后续 WHERE 子句求值做准备
+
+##### 1.3.4 Row 类
+
+```cpp
+// src/storage/row.h
+
+class Row {
+public:
+    Row() = default;
+    explicit Row(std::vector<Value> values);
+
+    // 访问
+    size_t size() const;
+    const Value& get(size_t idx) const;
+    Value& get(size_t idx);
+
+    // 修改
+    void append(Value value);
+    void set(size_t idx, Value value);
+
+    // 工具
+    bool empty() const;
+    void clear();
+    std::string toString() const;
+
+private:
+    std::vector<Value> values_;
+};
+```
+
+**设计要点**:
+- 简单的类型擦除容器，每个 `Value` 携带自己的 `LogicalType`
+- 与 Schema 解耦 —— Row 不知道自己属于哪个表，Schema 负责验证
+- 为向量化执行预留：未来可以添加 `RowBatch` 类包装 `std::vector<Row>`
+
+##### 1.3.5 Schema 类
+
+```cpp
+// src/storage/schema.h
+
+class ColumnSchema {
+public:
+    ColumnSchema(std::string name, LogicalType type, bool nullable = true);
+
+    const std::string& name() const;
+    const LogicalType& type() const;
+    bool isNullable() const;
+
+private:
+    std::string name_;
+    LogicalType type_;
+    bool nullable_;
+};
+
+class Schema {
+public:
+    Schema() = default;
+    explicit Schema(std::vector<ColumnSchema> columns);
+
+    // 列信息
+    size_t columnCount() const;
+    const ColumnSchema& column(size_t idx) const;
+    const ColumnSchema& column(const std::string& name) const;
+
+    // 查找
+    bool hasColumn(const std::string& name) const;
+    size_t columnIndex(const std::string& name) const;  // 找不到返回 -1 或抛异常
+
+    // 验证
+    bool validateRow(const Row& row) const;  // 检查列数、类型兼容性
+
+    // 工具
+    std::string toString() const;
+
+private:
+    std::vector<ColumnSchema> columns_;
+    std::unordered_map<std::string, size_t> name_to_index_;  // 列名 -> 索引缓存
+};
+```
+
+**设计要点**:
+- `ColumnSchema` 封装单列元信息：名称、类型、是否可空
+- `Schema` 维护列名到索引的哈希表，加速按名查找
+- `validateRow` 用于 INSERT 时验证数据合法性
+
+##### 1.3.6 Table 类
+
+```cpp
+// src/storage/table.h
+
+class Table {
+public:
+    Table(std::string name, Schema schema);
+
+    // 元信息
+    const std::string& name() const;
+    const Schema& schema() const;
+    size_t rowCount() const;
+
+    // 数据操作
+    void insert(Row row);
+    bool remove(size_t idx);  // 返回是否成功
+    void update(size_t idx, Row row);
+
+    // 访问
+    const Row& get(size_t idx) const;
+
+    // 迭代器（支持 range-based for）
+    auto begin() const { return rows_.begin(); }
+    auto end() const { return rows_.end(); }
+
+    // 清空
+    void clear();
+
+private:
+    std::string name_;
+    Schema schema_;
+    std::vector<Row> rows_;
+};
+```
+
+**设计要点**:
+- 简单的内存存储，使用 `std::vector<Row>`
+- 当前阶段用物理删除（简单）
+- 支持迭代器，方便执行引擎遍历
+- 后续持久化阶段会替换底层存储结构
+
+##### 1.3.7 Catalog 类
+
+```cpp
+// src/storage/catalog.h
+
+class Catalog {
+public:
+    Catalog() = default;
+
+    // 表管理
+    bool createTable(std::string name, Schema schema);
+    bool dropTable(const std::string& name);
+    bool hasTable(const std::string& name) const;
+
+    // 表访问
+    Table* getTable(const std::string& name);
+    const Table* getTable(const std::string& name) const;
+
+    // 迭代所有表
+    auto begin() const { return tables_.begin(); }
+    auto end() const { return tables_.end(); }
+    size_t tableCount() const;
+
+private:
+    std::unordered_map<std::string, std::unique_ptr<Table>> tables_;
+};
+```
+
+**设计要点**:
+- 管理所有表的元数据容器
+- 使用 `unique_ptr<Table>` 保证指针稳定性（`unordered_map` 扩容时会移动元素）
+- 表名作为 key，支持快速查找
+- 后续可扩展：索引管理、视图、系统表等
+
+##### 1.3.8 Executor 执行引擎
+
+```cpp
+// src/executor/executor.h
+
+/// 执行结果 - 单行返回
+class ExecutionResult {
+public:
+    enum class Status { OK, ERROR, EMPTY };
+
+    static ExecutionResult ok(Row row);
+    static ExecutionResult error(std::string message);
+    static ExecutionResult empty();
+
+    Status status() const;
+    const Row& row() const;
+    const std::string& errorMessage() const;
+    bool hasRow() const;
+
+private:
+    Status status_;
+    std::optional<Row> row_;
+    std::string error_message_;
+};
+
+/// 执行引擎
+class Executor {
+public:
+    explicit Executor(Catalog& catalog);
+
+    /// 执行 DDL (CREATE/DROP TABLE)
+    ExecutionResult execute(const CreateTableStmt& stmt);
+    ExecutionResult execute(const DropTableStmt& stmt);
+
+    /// 执行 DML (INSERT/SELECT/UPDATE/DELETE)
+    ExecutionResult execute(const InsertStmt& stmt);
+    ExecutionResult execute(const SelectStmt& stmt);  // 返回第一行，后续用迭代
+    ExecutionResult execute(const UpdateStmt& stmt);
+    ExecutionResult execute(const DeleteStmt& stmt);
+
+    /// 迭代查询结果（SELECT 后调用）
+    bool hasNext();
+    ExecutionResult next();
+
+private:
+    Catalog& catalog_;
+    // 当前查询状态（SELECT 用）
+    const Table* current_query_table_ = nullptr;
+    size_t current_row_index_ = 0;
+};
+```
+
+**设计要点**:
+- 接收 AST 节点，执行对应操作
+- SELECT 使用迭代模型：首次调用返回第一行，后续通过 `hasNext()`/`next()` 遍历
+- `ExecutionResult` 封装执行状态，便于错误处理
+- 与 Parser 解耦 —— Executor 只依赖 AST 类型定义
+- 预留向量化接口：当前迭代器模型可无缝扩展为 batch 版本
+
+##### 1.3.9 任务分解
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| P1-1 AST 节点基类定义 | 0.5 天 | `ASTNode` 基类 + `toString()` 方法 |
-| P1-2 CREATE TABLE AST | 1 天 | 解析 `CREATE TABLE t (a INT, b VARCHAR(10))` |
-| P1-3 DROP TABLE AST | 0.5 天 | 解析 `DROP TABLE t` |
-| P1-4 INSERT AST | 1 天 | 解析 `INSERT INTO t VALUES (1, 'a')` |
-| P1-5 SELECT 基础 AST | 1 天 | 解析 `SELECT a, b FROM t` |
-| P1-6 SELECT + WHERE AST | 1 天 | 解析 `SELECT * FROM t WHERE a > 1` |
-| P1-7 UPDATE AST | 1 天 | 解析 `UPDATE t SET a = 1 WHERE b = 2` |
-| P1-8 DELETE AST | 0.5 天 | 解析 `DELETE FROM t WHERE a = 1` |
-| P1-9 表达式 AST | 1 天 | 解析 `a + b * 2`, `a IS NULL`, `a AND b` |
-| P1-10 Parser 单元测试 | 1 天 | 所有 SQL 语句解析测试通过 |
-
-**里程碑验证**：Parser 能正确解析所有基础 SQL 并生成 AST
-
-#### 1.3 内存存储（1 周）
-
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| S1-1 类型系统 (Value 类) | 1 天 | `IntegerValue`, `StringValue`, `BoolValue` |
-| S1-2 Schema 定义 | 0.5 天 | `Column`, `Schema` 类，描述表结构 |
-| S1-3 Row/Tuple 实现 | 1 天 | `Row` 类，存储一行数据 |
-| S1-4 内存表 (Table) | 1 天 | `Table` 类，基于 `std::vector<Row>` |
-| S1-5 简单 Catalog | 1 天 | `Catalog` 类，管理所有表 |
-| S1-6 存储层单元测试 | 0.5 天 | 插入/查询/删除行测试通过 |
-
-**里程碑验证**：能创建表、插入行、按主键查询
-
-#### 1.4 执行引擎（2 周）
-
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| E1-1 执行器框架 (ExecutorContext) | 0.5 天 | 上下文对象，持有 Catalog 引用 |
-| E1-2 Result Set 定义 | 0.5 天 | `ResultSet` 类，返回查询结果 |
-| E1-3 CreateTableExecutor | 0.5 天 | 执行 CREATE TABLE 成功 |
-| E1-4 DropTableExecutor | 0.5 天 | 执行 DROP TABLE 成功 |
-| E1-5 InsertExecutor | 1 天 | 执行 INSERT 成功，能插入数据 |
-| E1-6 SequentialScanExecutor | 1 天 | 全表扫描返回所有行 |
-| E1-7 FilterExecutor | 1 天 | WHERE 条件过滤正确 |
-| E1-8 ProjectExecutor | 0.5 天 | 选择指定列正确 |
-| E1-9 UpdateExecutor | 1 天 | 执行 UPDATE 成功 |
-| E1-10 DeleteExecutor | 1 天 | 执行 DELETE 成功 |
-| E1-11 表达式求值 | 1 天 | `1 + 2 * 3 = 7`, `a > 1` 正确求值 |
-| E1-12 执行引擎集成测试 | 1 天 | 端到端 SQL 执行测试通过 |
+| S1-1 LogicalType 实现 | 0.5 天 | 类型枚举、辅助方法、测试通过 |
+| S1-2 Value 类实现 | 1 天 | 所有静态工厂方法、类型检查、比较方法 |
+| S1-3 Row 类实现 | 0.5 天 | 增删改查、迭代器支持 |
+| S1-4 Schema 类实现 | 1 天 | 列管理、按名查找、行验证 |
+| S1-5 Table 类实现 | 1 天 | 内存存储、CRUD 操作 |
+| S1-6 Catalog 类实现 | 1 天 | 表管理、按名查找 |
+| S1-7 Executor 框架 | 0.5 天 | ExecutionResult、Executor 骨架 |
+| S1-8 DDL 执行 (CREATE/DROP) | 1 天 | 通过 Catalog 创建/删除表 |
+| S1-9 INSERT 执行 | 1 天 | AST → Value 转换、插入 Table |
+| S1-10 SELECT 执行 | 1.5 天 | 全表扫描、迭代返回 |
+| S1-11 UPDATE/DELETE 执行 | 1 天 | 条件匹配、修改/删除行 |
+| S1-12 表达式求值 | 1.5 天 | BinaryExpr/UnaryExpr/IsNullExpr 求值 |
+| S1-13 集成测试 | 1 天 | 端到端 SQL 执行流程 |
 
 **里程碑验证**：端到端执行 `INSERT INTO t VALUES (1, 'a'); SELECT * FROM t;` 成功
+
+##### 1.3.10 测试计划（精简版）
+
+```
+tests/unit/
+├── common/
+│   ├── test_types.cpp        # 扩展：加入 LogicalType 测试
+│   └── test_value.cpp        # 新增：Value + Row 合并测试
+└── storage/
+    ├── test_storage.cpp      # 新增：Schema + Table + Catalog 合并测试
+    └── test_executor.cpp     # 新增：Executor 测试（依赖完整流程）
+```
+
+**精简原则**:
+- 7 个测试文件 → 4 个测试文件
+- `LogicalType` 合并到现有 `test_types.cpp`
+- `Value` + `Row` 合并（Row 测试依赖 Value）
+- `Schema` + `Table` + `Catalog` 合并为 `test_storage.cpp`（三个类紧密相关）
+- `Executor` 保持独立（是集成测试，需要完整环境）
 
 #### 1.5 命令行工具（1 周）
 
@@ -567,8 +925,9 @@ DELETE FROM table_name WHERE condition;
 |-------|------|------|----------|
 | Phase 0 | 项目搭建、基础设施 | ✅ 完成 | 2026-03-11 |
 | Phase 1.1 | 词法分析器 (Lexer) | ✅ 完成 | 2026-03-12 |
-| Phase 1.2 | 语法分析器 (Parser) | 🔄 进行中 | - |
-| Phase 1.3-1.5 | 存储层 + 执行器 + CLI | 📋 计划中 | - |
+| Phase 1.2 | 语法分析器 (Parser) | ✅ 完成 | 2026-03-17 |
+| Phase 1.3-1.4 | 内存存储层 + 执行引擎 | 🔄 设计完成，待实现 | - |
+| Phase 1.5 | CLI 工具 | 📋 计划中 | - |
 | Phase 2 | 多线程 + PostgreSQL 协议 | 📋 计划中 | - |
 | Phase 3 | B+ 树存储引擎 | 📋 计划中 | - |
 | Phase 4 | 事务系统 | 📋 计划中 | - |
@@ -578,11 +937,12 @@ DELETE FROM table_name WHERE condition;
 
 1. ~~**立即开始**：创建项目目录结构和 CMake 配置~~ ✅ 已完成
 2. ~~**当前目标**：Phase 1.1 - 词法分析器 (Lexer)~~ ✅ 已完成
-3. **当前目标**：Phase 1.2 - 语法分析器 (Parser)
-4. **第一个里程碑**：Phase 1 完成，能在内存中执行基础 SQL
-5. **第二个里程碑**：Phase 2 完成，能用 psql 连接
-6. **第三个里程碑**：Phase 3 完成，数据持久化到磁盘
-7. **第四个里程碑**：Phase 4 完成，支持完整事务
+3. ~~**当前目标**：Phase 1.2 - 语法分析器 (Parser)~~ ✅ 已完成
+4. **当前目标**：Phase 1.3 - 内存存储层
+5. **第一个里程碑**：Phase 1 完成，能在内存中执行基础 SQL
+6. **第二个里程碑**：Phase 2 完成，能用 psql 连接
+7. **第三个里程碑**：Phase 3 完成，数据持久化到磁盘
+8. **第四个里程碑**：Phase 4 完成，支持完整事务
 
 ---
 
