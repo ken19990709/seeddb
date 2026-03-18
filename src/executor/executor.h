@@ -191,6 +191,25 @@ private:
     /// @return The corresponding LogicalType.
     LogicalType toLogicalType(const parser::DataTypeInfo& dti) const;
 
+    /// Evaluate a WHERE clause expression against a row.
+    /// @param expr The expression to evaluate.
+    /// @param row The row to evaluate against.
+    /// @param schema The schema for column lookups.
+    /// @return true if the row matches the WHERE clause, false otherwise.
+    bool evaluateWhereClause(const parser::Expr* expr, const Row& row, const Schema& schema) const;
+
+    /// Evaluate an expression to get a Value.
+    /// @param expr The expression to evaluate.
+    /// @param row The row for column references.
+    /// @param schema The schema for column lookups.
+    /// @return The evaluated Value.
+    Value evaluateExpr(const parser::Expr* expr, const Row& row, const Schema& schema) const;
+
+    // Query state for SELECT iteration
+    Table* current_table_ = nullptr;           ///< Current table being queried.
+    std::vector<size_t> matching_rows_;        ///< Indices of rows matching WHERE clause.
+    size_t current_row_index_ = 0;             ///< Current position in matching_rows_.
+
     Catalog& catalog_;
 };
 
