@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "storage/catalog.h"
 #include "storage/row.h"
 #include "storage/schema.h"
+#include "storage/table.h"
 
 // =============================================================================
 // Row Class Tests
@@ -350,4 +352,312 @@ TEST_CASE("logical_type_name helper function", "[storage][schema]") {
     REQUIRE(seeddb::logical_type_name(seeddb::LogicalTypeId::DOUBLE) == std::string("DOUBLE"));
     REQUIRE(seeddb::logical_type_name(seeddb::LogicalTypeId::VARCHAR) == std::string("VARCHAR"));
     REQUIRE(seeddb::logical_type_name(seeddb::LogicalTypeId::BOOLEAN) == std::string("BOOLEAN"));
+}
+
+// =============================================================================
+// Table Class Tests
+// =============================================================================
+
+TEST_CASE("Table constructs with name and schema", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER), false),
+        seeddb::ColumnSchema("name", seeddb::LogicalType(seeddb::LogicalTypeId::VARCHAR))
+    });
+
+    seeddb::Table table("users", schema);
+    REQUIRE(table.name() == "users");
+    REQUIRE(table.schema().columnCount() == 2);
+}
+
+TEST_CASE("Table starts with zero rows", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    seeddb::Table table("test", schema);
+    REQUIRE(table.rowCount() == 0);
+}
+
+TEST_CASE("Table insert rows", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER), false),
+        seeddb::ColumnSchema("value", seeddb::LogicalType(seeddb::LogicalTypeId::VARCHAR))
+    });
+
+    seeddb::Table table("test", schema);
+    REQUIRE(table.rowCount() == 0);
+
+    table.insert(seeddb::Row({seeddb::Value::integer(1), seeddb::Value::varchar("first")}));
+    REQUIRE(table.rowCount() == 1);
+
+    table.insert(seeddb::Row({seeddb::Value::integer(2), seeddb::Value::varchar("second")}));
+    REQUIRE(table.rowCount() == 2);
+}
+
+TEST_CASE("Table get row by index", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER)),
+        seeddb::ColumnSchema("name", seeddb::LogicalType(seeddb::LogicalTypeId::VARCHAR))
+    });
+
+    seeddb::Table table("test", schema);
+    table.insert(seeddb::Row({seeddb::Value::integer(1), seeddb::Value::varchar("alice")}));
+    table.insert(seeddb::Row({seeddb::Value::integer(2), seeddb::Value::varchar("bob")}));
+
+    const seeddb::Table& const_table = table;
+    REQUIRE(const_table.get(0).get(0).asInt32() == 1);
+    REQUIRE(const_table.get(0).get(1).asString() == "alice");
+    REQUIRE(const_table.get(1).get(0).asInt32() == 2);
+    REQUIRE(const_table.get(1).get(1).asString() == "bob");
+}
+
+TEST_CASE("Table update row at index", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER)),
+        seeddb::ColumnSchema("value", seeddb::LogicalType(seeddb::LogicalTypeId::VARCHAR))
+    });
+
+    seeddb::Table table("test", schema);
+    table.insert(seeddb::Row({seeddb::Value::integer(1), seeddb::Value::varchar("old")}));
+
+    table.update(0, seeddb::Row({seeddb::Value::integer(99), seeddb::Value::varchar("new")}));
+
+    REQUIRE(table.get(0).get(0).asInt32() == 99);
+    REQUIRE(table.get(0).get(1).asString() == "new");
+    REQUIRE(table.rowCount() == 1);  // count unchanged
+}
+
+TEST_CASE("Table remove row at index", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    seeddb::Table table("test", schema);
+    table.insert(seeddb::Row({seeddb::Value::integer(1)}));
+    table.insert(seeddb::Row({seeddb::Value::integer(2)}));
+    table.insert(seeddb::Row({seeddb::Value::integer(3)}));
+    REQUIRE(table.rowCount() == 3);
+
+    SECTION("Remove middle row returns true") {
+        bool result = table.remove(1);
+        REQUIRE(result);
+        REQUIRE(table.rowCount() == 2);
+        REQUIRE(table.get(0).get(0).asInt32() == 1);
+        REQUIRE(table.get(1).get(0).asInt32() == 3);
+    }
+
+    SECTION("Remove out of bounds returns false") {
+        bool result = table.remove(100);
+        REQUIRE(!result);
+        REQUIRE(table.rowCount() == 3);
+    }
+}
+
+TEST_CASE("Table clear removes all rows", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    seeddb::Table table("test", schema);
+    table.insert(seeddb::Row({seeddb::Value::integer(1)}));
+    table.insert(seeddb::Row({seeddb::Value::integer(2)}));
+    REQUIRE(table.rowCount() == 2);
+
+    table.clear();
+    REQUIRE(table.rowCount() == 0);
+}
+
+TEST_CASE("Table iterator support", "[storage][table]") {
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    seeddb::Table table("test", schema);
+    table.insert(seeddb::Row({seeddb::Value::integer(1)}));
+    table.insert(seeddb::Row({seeddb::Value::integer(2)}));
+    table.insert(seeddb::Row({seeddb::Value::integer(3)}));
+
+    SECTION("Range-based for loop") {
+        int sum = 0;
+        for (const auto& row : table) {
+            sum += row.get(0).asInt32();
+        }
+        REQUIRE(sum == 6);
+    }
+
+    SECTION("Iterator operations") {
+        auto it = table.begin();
+        REQUIRE(it != table.end());
+        REQUIRE(it->get(0).asInt32() == 1);
+
+        ++it;
+        REQUIRE(it->get(0).asInt32() == 2);
+
+        ++it;
+        REQUIRE(it->get(0).asInt32() == 3);
+
+        ++it;
+        REQUIRE(it == table.end());
+    }
+}
+
+// =============================================================================
+// Catalog Class Tests
+// =============================================================================
+
+TEST_CASE("Catalog default constructs empty", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+    REQUIRE(catalog.tableCount() == 0);
+}
+
+TEST_CASE("Catalog createTable", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER), false),
+        seeddb::ColumnSchema("name", seeddb::LogicalType(seeddb::LogicalTypeId::VARCHAR))
+    });
+
+    SECTION("Create new table returns true") {
+        bool result = catalog.createTable("users", seeddb::Schema(schema));
+        REQUIRE(result);
+        REQUIRE(catalog.tableCount() == 1);
+        REQUIRE(catalog.hasTable("users"));
+    }
+
+    SECTION("Create duplicate table returns false") {
+        catalog.createTable("users", seeddb::Schema(schema));
+        bool result = catalog.createTable("users", seeddb::Schema(schema));
+        REQUIRE(!result);
+        REQUIRE(catalog.tableCount() == 1);
+    }
+}
+
+TEST_CASE("Catalog dropTable", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    catalog.createTable("test", seeddb::Schema(schema));
+
+    SECTION("Drop existing table returns true") {
+        bool result = catalog.dropTable("test");
+        REQUIRE(result);
+        REQUIRE(catalog.tableCount() == 0);
+        REQUIRE(!catalog.hasTable("test"));
+    }
+
+    SECTION("Drop non-existent table returns false") {
+        bool result = catalog.dropTable("nonexistent");
+        REQUIRE(!result);
+        REQUIRE(catalog.tableCount() == 1);
+    }
+}
+
+TEST_CASE("Catalog hasTable", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    REQUIRE(!catalog.hasTable("users"));
+
+    catalog.createTable("users", seeddb::Schema(schema));
+    REQUIRE(catalog.hasTable("users"));
+    REQUIRE(!catalog.hasTable("products"));
+}
+
+TEST_CASE("Catalog getTable mutable", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER)),
+        seeddb::ColumnSchema("name", seeddb::LogicalType(seeddb::LogicalTypeId::VARCHAR))
+    });
+
+    catalog.createTable("users", seeddb::Schema(schema));
+
+    seeddb::Table* table = catalog.getTable("users");
+    REQUIRE(table != nullptr);
+    REQUIRE(table->name() == "users");
+
+    // Verify we can mutate through the pointer
+    table->insert(seeddb::Row({seeddb::Value::integer(1), seeddb::Value::varchar("alice")}));
+    REQUIRE(table->rowCount() == 1);
+}
+
+TEST_CASE("Catalog getTable const", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    catalog.createTable("test", seeddb::Schema(schema));
+    const seeddb::Catalog& const_catalog = catalog;
+
+    const seeddb::Table* table = const_catalog.getTable("test");
+    REQUIRE(table != nullptr);
+    REQUIRE(table->name() == "test");
+}
+
+TEST_CASE("Catalog getTable nonexistent returns nullptr", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    REQUIRE(catalog.getTable("nonexistent") == nullptr);
+
+    const seeddb::Catalog& const_catalog = catalog;
+    REQUIRE(const_catalog.getTable("nonexistent") == nullptr);
+}
+
+TEST_CASE("Catalog tableCount", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    REQUIRE(catalog.tableCount() == 0);
+
+    catalog.createTable("t1", seeddb::Schema(schema));
+    REQUIRE(catalog.tableCount() == 1);
+
+    catalog.createTable("t2", seeddb::Schema(schema));
+    REQUIRE(catalog.tableCount() == 2);
+
+    catalog.dropTable("t1");
+    REQUIRE(catalog.tableCount() == 1);
+}
+
+TEST_CASE("Catalog iterator support", "[storage][catalog]") {
+    seeddb::Catalog catalog;
+
+    seeddb::Schema schema({
+        seeddb::ColumnSchema("id", seeddb::LogicalType(seeddb::LogicalTypeId::INTEGER))
+    });
+
+    catalog.createTable("users", seeddb::Schema(schema));
+    catalog.createTable("products", seeddb::Schema(schema));
+
+    SECTION("Range-based for loop") {
+        std::vector<std::string> names;
+        for (const auto& [name, table] : catalog) {
+            names.push_back(name);
+            REQUIRE(table != nullptr);
+        }
+        REQUIRE(names.size() == 2);
+        // Note: unordered_map iteration order is not guaranteed
+    }
+
+    SECTION("Iterator yields correct count") {
+        size_t count = 0;
+        for (const auto& pair : catalog) {
+            (void)pair;  // suppress unused warning
+            ++count;
+        }
+        REQUIRE(count == 2);
+    }
 }
