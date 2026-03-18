@@ -22,6 +22,7 @@ target_sources(seeddb_tests
         unit/common/test_logger.cpp
         unit/common/test_config.cpp
         unit/common/test_logical_type.cpp
+        unit/common/test_value.cpp
         unit/parser/test_lexer.cpp
         unit/parser/test_ast.cpp
         unit/parser/test_parser.cpp
