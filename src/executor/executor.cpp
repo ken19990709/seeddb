@@ -195,11 +195,26 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
 }
 
 ExecutionResult Executor::execute(const parser::SelectStmt& stmt) {
-    (void)stmt;  // Suppress unused parameter warning
-    return ExecutionResult::error(
-        ErrorCode::NOT_IMPLEMENTED,
-        "SELECT not implemented"
-    );
+    // Prepare the SELECT query
+    if (!prepareSelect(stmt)) {
+        if (!stmt.fromTable()) {
+            return ExecutionResult::error(
+                ErrorCode::NOT_IMPLEMENTED,
+                "SELECT without FROM not implemented"
+            );
+        }
+        return ExecutionResult::error(
+            ErrorCode::TABLE_NOT_FOUND,
+            "Table '" + stmt.fromTable()->name() + "' not found"
+        );
+    }
+
+    // Return first row if available
+    if (hasNext()) {
+        return next();
+    }
+
+    return ExecutionResult::empty();
 }
 
 // =============================================================================

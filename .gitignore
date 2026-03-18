@@ -35,3 +35,8 @@ coverage/
 # OS files
 .DS_Store
 Thumbs.db
+.claude
+.qoder/repowiki
+.qoder/skills
+.qoder/commands
+
