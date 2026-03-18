@@ -7,6 +7,7 @@ target_link_libraries(seeddb_tests
         Catch2::Catch2WithMain
         seeddb_common
         seeddb_parser
+        seeddb_storage
 )
 
 # Enable CTest integration with Catch2
@@ -26,4 +27,5 @@ target_sources(seeddb_tests
         unit/parser/test_lexer.cpp
         unit/parser/test_ast.cpp
         unit/parser/test_parser.cpp
+        unit/storage/test_storage.cpp
 )
