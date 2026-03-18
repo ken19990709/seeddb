@@ -5,21 +5,10 @@
 #include <string>
 
 #include "common/error.h"
+#include "common/logical_type.h"
 #include "storage/row.h"
 #include "storage/catalog.h"
-
-// Forward declarations for parser AST types
-namespace seeddb {
-namespace ast {
-    class Statement;
-    class SelectStmt;
-    class InsertStmt;
-    class UpdateStmt;
-    class DeleteStmt;
-    class CreateStmt;
-    class DropStmt;
-} // namespace ast
-} // namespace seeddb
+#include "parser/ast.h"
 
 namespace seeddb {
 
@@ -124,7 +113,6 @@ private:
 
 /// Query execution engine.
 /// Executes parsed SQL statements against the database catalog.
-/// Implementation will be added in later tasks.
 class Executor {
 public:
     // =========================================================================
@@ -136,18 +124,18 @@ public:
     explicit Executor(Catalog& catalog);
 
     // =========================================================================
-    // DDL Execution (Stubs - implementation in later tasks)
+    // DDL Execution
     // =========================================================================
 
     /// Execute a CREATE TABLE statement.
     /// @param stmt The CREATE statement.
     /// @return Execution result.
-    ExecutionResult executeCreate(const ast::CreateStmt& stmt);
+    ExecutionResult execute(const parser::CreateTableStmt& stmt);
 
     /// Execute a DROP TABLE statement.
     /// @param stmt The DROP statement.
     /// @return Execution result.
-    ExecutionResult executeDrop(const ast::DropStmt& stmt);
+    ExecutionResult execute(const parser::DropTableStmt& stmt);
 
     // =========================================================================
     // DML Execution (Stubs - implementation in later tasks)
@@ -156,17 +144,22 @@ public:
     /// Execute an INSERT statement.
     /// @param stmt The INSERT statement.
     /// @return Execution result.
-    ExecutionResult executeInsert(const ast::InsertStmt& stmt);
+    ExecutionResult execute(const parser::InsertStmt& stmt);
 
     /// Execute an UPDATE statement.
     /// @param stmt The UPDATE statement.
     /// @return Execution result.
-    ExecutionResult executeUpdate(const ast::UpdateStmt& stmt);
+    ExecutionResult execute(const parser::UpdateStmt& stmt);
 
     /// Execute a DELETE statement.
     /// @param stmt The DELETE statement.
     /// @return Execution result.
-    ExecutionResult executeDelete(const ast::DeleteStmt& stmt);
+    ExecutionResult execute(const parser::DeleteStmt& stmt);
+
+    /// Execute a SELECT statement (iterator interface).
+    /// @param stmt The SELECT statement.
+    /// @return Execution result.
+    ExecutionResult execute(const parser::SelectStmt& stmt);
 
     // =========================================================================
     // SELECT Execution - Iterator Interface (Stubs - implementation in later tasks)
@@ -175,7 +168,7 @@ public:
     /// Prepare a SELECT statement for execution.
     /// @param stmt The SELECT statement.
     /// @return true if prepared successfully, false otherwise.
-    bool prepareSelect(const ast::SelectStmt& stmt);
+    bool prepareSelect(const parser::SelectStmt& stmt);
 
     /// Check if there are more rows to iterate.
     /// @return true if more rows available, false otherwise.
@@ -189,6 +182,15 @@ public:
     void resetQuery();
 
 private:
+    // =========================================================================
+    // Helper Methods
+    // =========================================================================
+
+    /// Convert parser DataTypeInfo to LogicalType.
+    /// @param dti The data type info from parser.
+    /// @return The corresponding LogicalType.
+    LogicalType toLogicalType(const parser::DataTypeInfo& dti) const;
+
     Catalog& catalog_;
 };
 
