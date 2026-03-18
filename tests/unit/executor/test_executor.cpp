@@ -814,3 +814,297 @@ TEST_CASE("Executor: SELECT verify row data integrity", "[executor][dml][select]
     REQUIRE(result.row().get(1).asString() == "test");
     REQUIRE(result.row().get(2).asBool() == true);
 }
+
+// =============================================================================
+// Executor UPDATE Tests
+// =============================================================================
+
+TEST_CASE("Executor: UPDATE without WHERE updates all rows", "[executor][dml][update]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table and insert data
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("items");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "value", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert1 = std::make_unique<parser::InsertStmt>("items");
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(10)));
+    executor.execute(*insert1);
+
+    auto insert2 = std::make_unique<parser::InsertStmt>("items");
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(20)));
+    executor.execute(*insert2);
+
+    // UPDATE value = 100 for all rows
+    auto update_stmt = std::make_unique<parser::UpdateStmt>("items");
+    update_stmt->addAssignment("value", std::make_unique<parser::LiteralExpr>(int64_t(100)));
+    
+    ExecutionResult result = executor.execute(*update_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
+
+    // Verify all rows updated
+    auto select_stmt = std::make_unique<parser::SelectStmt>();
+    select_stmt->setSelectAll(true);
+    select_stmt->setFromTable(std::make_unique<parser::TableRef>("items"));
+    
+    executor.prepareSelect(*select_stmt);
+    while (executor.hasNext()) {
+        ExecutionResult row_result = executor.next();
+        REQUIRE(row_result.row().get(1).asInt32() == 100);
+    }
+}
+
+TEST_CASE("Executor: UPDATE with WHERE updates matching rows only", "[executor][dml][update]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table and insert data
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("users");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "age", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert1 = std::make_unique<parser::InsertStmt>("users");
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(std::string("Alice")));
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(25)));
+    executor.execute(*insert1);
+
+    auto insert2 = std::make_unique<parser::InsertStmt>("users");
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(std::string("Bob")));
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(30)));
+    executor.execute(*insert2);
+
+    // UPDATE age = 26 WHERE id = 1
+    auto update_stmt = std::make_unique<parser::UpdateStmt>("users");
+    update_stmt->addAssignment("age", std::make_unique<parser::LiteralExpr>(int64_t(26)));
+    update_stmt->setWhere(std::make_unique<parser::BinaryExpr>(
+        "=",
+        std::make_unique<parser::ColumnRef>("id"),
+        std::make_unique<parser::LiteralExpr>(int64_t(1))
+    ));
+    
+    ExecutionResult result = executor.execute(*update_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
+
+    // Verify only Alice's age was updated
+    auto select_stmt = std::make_unique<parser::SelectStmt>();
+    select_stmt->setSelectAll(true);
+    select_stmt->setFromTable(std::make_unique<parser::TableRef>("users"));
+    
+    executor.prepareSelect(*select_stmt);
+    while (executor.hasNext()) {
+        ExecutionResult row_result = executor.next();
+        if (row_result.row().get(0).asInt32() == 1) {
+            REQUIRE(row_result.row().get(2).asInt32() == 26);  // Alice updated
+        } else {
+            REQUIRE(row_result.row().get(2).asInt32() == 30);  // Bob unchanged
+        }
+    }
+}
+
+TEST_CASE("Executor: UPDATE fails on non-existent table", "[executor][dml][update]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto update_stmt = std::make_unique<parser::UpdateStmt>("nonexistent");
+    update_stmt->addAssignment("col", std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    
+    ExecutionResult result = executor.execute(*update_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::ERROR);
+    REQUIRE(result.errorCode() == ErrorCode::TABLE_NOT_FOUND);
+}
+
+TEST_CASE("Executor: UPDATE fails on non-existent column", "[executor][dml][update]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("t");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("t");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    executor.execute(*insert);
+
+    auto update_stmt = std::make_unique<parser::UpdateStmt>("t");
+    update_stmt->addAssignment("nonexistent", std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    
+    ExecutionResult result = executor.execute(*update_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::ERROR);
+    REQUIRE(result.errorCode() == ErrorCode::COLUMN_NOT_FOUND);
+}
+
+// =============================================================================
+// Executor DELETE Tests
+// =============================================================================
+
+TEST_CASE("Executor: DELETE without WHERE removes all rows", "[executor][dml][delete]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table and insert data
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("items");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert1 = std::make_unique<parser::InsertStmt>("items");
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    executor.execute(*insert1);
+
+    auto insert2 = std::make_unique<parser::InsertStmt>("items");
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    executor.execute(*insert2);
+
+    REQUIRE(catalog.getTable("items")->rowCount() == 2);
+
+    // DELETE all rows
+    auto delete_stmt = std::make_unique<parser::DeleteStmt>("items");
+    
+    ExecutionResult result = executor.execute(*delete_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
+    REQUIRE(catalog.getTable("items")->rowCount() == 0);
+}
+
+TEST_CASE("Executor: DELETE with WHERE removes matching rows only", "[executor][dml][delete]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table and insert data
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("users");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    executor.execute(*create_stmt);
+
+    auto insert1 = std::make_unique<parser::InsertStmt>("users");
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(std::string("Alice")));
+    executor.execute(*insert1);
+
+    auto insert2 = std::make_unique<parser::InsertStmt>("users");
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(std::string("Bob")));
+    executor.execute(*insert2);
+
+    auto insert3 = std::make_unique<parser::InsertStmt>("users");
+    insert3->addValues(std::make_unique<parser::LiteralExpr>(int64_t(3)));
+    insert3->addValues(std::make_unique<parser::LiteralExpr>(std::string("Charlie")));
+    executor.execute(*insert3);
+
+    REQUIRE(catalog.getTable("users")->rowCount() == 3);
+
+    // DELETE WHERE id = 2 (remove Bob)
+    auto delete_stmt = std::make_unique<parser::DeleteStmt>("users");
+    delete_stmt->setWhere(std::make_unique<parser::BinaryExpr>(
+        "=",
+        std::make_unique<parser::ColumnRef>("id"),
+        std::make_unique<parser::LiteralExpr>(int64_t(2))
+    ));
+    
+    ExecutionResult result = executor.execute(*delete_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
+    REQUIRE(catalog.getTable("users")->rowCount() == 2);
+
+    // Verify Bob was deleted
+    auto select_stmt = std::make_unique<parser::SelectStmt>();
+    select_stmt->setSelectAll(true);
+    select_stmt->setFromTable(std::make_unique<parser::TableRef>("users"));
+    
+    executor.prepareSelect(*select_stmt);
+    while (executor.hasNext()) {
+        ExecutionResult row_result = executor.next();
+        REQUIRE(row_result.row().get(0).asInt32() != 2);  // No row with id = 2
+    }
+}
+
+TEST_CASE("Executor: DELETE with complex WHERE condition", "[executor][dml][delete]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table and insert data
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("nums");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "val", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    for (int i = 1; i <= 5; ++i) {
+        auto insert = std::make_unique<parser::InsertStmt>("nums");
+        insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(i)));
+        executor.execute(*insert);
+    }
+
+    REQUIRE(catalog.getTable("nums")->rowCount() == 5);
+
+    // DELETE WHERE val > 2 AND val < 5 (should delete 3 and 4)
+    auto delete_stmt = std::make_unique<parser::DeleteStmt>("nums");
+    delete_stmt->setWhere(std::make_unique<parser::BinaryExpr>(
+        "AND",
+        std::make_unique<parser::BinaryExpr>(
+            ">",
+            std::make_unique<parser::ColumnRef>("val"),
+            std::make_unique<parser::LiteralExpr>(int64_t(2))
+        ),
+        std::make_unique<parser::BinaryExpr>(
+            "<",
+            std::make_unique<parser::ColumnRef>("val"),
+            std::make_unique<parser::LiteralExpr>(int64_t(5))
+        )
+    ));
+    
+    ExecutionResult result = executor.execute(*delete_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
+    REQUIRE(catalog.getTable("nums")->rowCount() == 3);  // 1, 2, 5 remain
+}
+
+TEST_CASE("Executor: DELETE fails on non-existent table", "[executor][dml][delete]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto delete_stmt = std::make_unique<parser::DeleteStmt>("nonexistent");
+    
+    ExecutionResult result = executor.execute(*delete_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::ERROR);
+    REQUIRE(result.errorCode() == ErrorCode::TABLE_NOT_FOUND);
+}
+
+TEST_CASE("Executor: DELETE no rows matched returns success", "[executor][dml][delete]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table and insert data
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("t");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("t");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    executor.execute(*insert);
+
+    // DELETE WHERE id = 999 (no match)
+    auto delete_stmt = std::make_unique<parser::DeleteStmt>("t");
+    delete_stmt->setWhere(std::make_unique<parser::BinaryExpr>(
+        "=",
+        std::make_unique<parser::ColumnRef>("id"),
+        std::make_unique<parser::LiteralExpr>(int64_t(999))
+    ));
+    
+    ExecutionResult result = executor.execute(*delete_stmt);
+    REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
+    REQUIRE(catalog.getTable("t")->rowCount() == 1);  // Row still exists
+}

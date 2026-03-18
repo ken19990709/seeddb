@@ -179,19 +179,116 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
 }
 
 ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
-    (void)stmt;  // Suppress unused parameter warning
-    return ExecutionResult::error(
-        ErrorCode::NOT_IMPLEMENTED,
-        "UPDATE not implemented"
-    );
+    const std::string& table_name = stmt.tableName();
+
+    // Check if table exists
+    if (!catalog_.hasTable(table_name)) {
+        return ExecutionResult::error(
+            ErrorCode::TABLE_NOT_FOUND,
+            "Table '" + table_name + "' not found"
+        );
+    }
+
+    Table* table = catalog_.getTable(table_name);
+    const Schema& schema = table->schema();
+    const parser::Expr* where_clause = stmt.whereClause();
+
+    // Track rows to update and count of updated rows
+    std::vector<size_t> rows_to_update;
+    size_t update_count = 0;
+
+    // Find matching rows
+    for (size_t i = 0; i < table->rowCount(); ++i) {
+        const Row& row = table->get(i);
+        if (!where_clause || evaluateWhereClause(where_clause, row, schema)) {
+            rows_to_update.push_back(i);
+        }
+    }
+
+    // Update matching rows
+    for (size_t idx : rows_to_update) {
+        // Take a value copy to avoid stale reference after table->update()
+        Row old_row = table->get(idx);
+
+        // Build new row with updated values
+        std::vector<Value> new_values;
+        new_values.reserve(schema.columnCount());
+
+        // Copy old values
+        for (size_t i = 0; i < schema.columnCount(); ++i) {
+            new_values.push_back(old_row.get(i));
+        }
+
+        // Apply assignments
+        const auto& assignments = stmt.assignments();
+        for (const auto& [col_name, expr] : assignments) {
+            // Find column index
+            auto col_idx_opt = schema.columnIndex(col_name);
+            if (!col_idx_opt.has_value()) {
+                return ExecutionResult::error(
+                    ErrorCode::COLUMN_NOT_FOUND,
+                    "Column '" + col_name + "' not found in table '" + table_name + "'"
+                );
+            }
+
+            size_t col_idx = col_idx_opt.value();
+
+            // Evaluate the expression using the old row for column references
+            Value new_value = evaluateExpr(expr.get(), old_row, schema);
+            new_values[col_idx] = new_value;
+        }
+
+        // Create new row and validate
+        Row new_row(std::move(new_values));
+        if (!schema.validateRow(new_row)) {
+            return ExecutionResult::error(
+                ErrorCode::CONSTRAINT_VIOLATION,
+                "Updated row violates schema constraints"
+            );
+        }
+
+        // Update the row
+        table->update(idx, std::move(new_row));
+        update_count++;
+    }
+
+        // Store update count for CLI to display
+    // For now, return empty result (CLI will show "UPDATE N" separately)
+    (void)update_count;  // Will be used later for result display
+    return ExecutionResult::empty();
 }
 
 ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
-    (void)stmt;  // Suppress unused parameter warning
-    return ExecutionResult::error(
-        ErrorCode::NOT_IMPLEMENTED,
-        "DELETE not implemented"
-    );
+    const std::string& table_name = stmt.tableName();
+
+    // Check if table exists
+    if (!catalog_.hasTable(table_name)) {
+        return ExecutionResult::error(
+            ErrorCode::TABLE_NOT_FOUND,
+            "Table '" + table_name + "' not found"
+        );
+    }
+
+    Table* table = catalog_.getTable(table_name);
+    const Schema& schema = table->schema();
+    const parser::Expr* where_clause = stmt.whereClause();
+
+    // Find rows to delete (collect indices in ascending order)
+    std::vector<size_t> rows_to_delete;
+    for (size_t i = 0; i < table->rowCount(); ++i) {
+        const Row& row = table->get(i);
+        if (!where_clause || evaluateWhereClause(where_clause, row, schema)) {
+            rows_to_delete.push_back(i);
+        }
+    }
+
+    // Delete rows from end to start to avoid index shifting issues
+    size_t delete_count = rows_to_delete.size();
+    // Bulk delete in O(n) time using erase-remove idiom
+    table->removeBulk(rows_to_delete);
+
+    (void)delete_count;  // Will be used later for result display
+    return ExecutionResult::empty();
 }
 
 ExecutionResult Executor::execute(const parser::SelectStmt& stmt) {

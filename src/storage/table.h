@@ -72,6 +72,39 @@ public:
         return true;
     }
 
+    /// Remove multiple rows at the specified indices in O(n) time.
+    /// @param indices Sorted vector of indices to remove (ascending order).
+    /// @return Number of rows removed.
+    /// @note Indices must be sorted in ascending order for correct behavior.
+    size_t removeBulk(const std::vector<size_t>& indices) {
+        if (indices.empty()) {
+            return 0;
+        }
+
+        // Build a removal mask
+        std::vector<bool> to_remove(rows_.size(), false);
+        for (size_t idx : indices) {
+            if (idx < rows_.size()) {
+                to_remove[idx] = true;
+            }
+        }
+
+        // Compact: move surviving rows to front (erase-remove idiom)
+        size_t write_pos = 0;
+        for (size_t read_pos = 0; read_pos < rows_.size(); ++read_pos) {
+            if (!to_remove[read_pos]) {
+                if (write_pos != read_pos) {
+                    rows_[write_pos] = std::move(rows_[read_pos]);
+                }
+                ++write_pos;
+            }
+        }
+
+        size_t removed = rows_.size() - write_pos;
+        rows_.resize(write_pos);
+        return removed;
+    }
+
     /// Remove all rows from the table.
     void clear() { rows_.clear(); }
 

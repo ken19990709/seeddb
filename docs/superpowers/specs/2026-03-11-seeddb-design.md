@@ -281,358 +281,12 @@ seeddb/
 
 **里程碑验证**：Parser 能正确解析所有基础 SQL 并生成 AST ✅
 
-#### 1.3 内存存储层 + 1.4 执行引擎（合并实现）
+#### 1.3 内存存储层 + 1.4 执行引擎（合并实现）✅ 已完成
+
+> **完成日期**: 2026-03-18
 
 > **设计日期**: 2026-03-17
 > **设计原则**: Iterator 执行模型 + 向量化预留 + DuckDB 风格类型系统
-
-##### 1.3.1 架构概览
-
-```
-src/
-├── common/
-│   ├── logical_type.h      # LogicalType, LogicalTypeId
-│   └── value.h             # Value 类
-├── storage/
-│   ├── row.h               # Row 类
-│   ├── schema.h            # ColumnSchema, Schema
-│   ├── table.h             # Table 类
-│   └── catalog.h           # Catalog 类
-└── executor/
-    └── executor.h          # ExecutionResult, Executor
-
-tests/unit/
-├── common/
-│   ├── test_types.cpp      # 扩展：加入 LogicalType 测试
-│   └── test_value.cpp      # 新增：Value + Row 合并测试
-└── storage/
-    ├── test_storage.cpp    # 新增：Schema + Table + Catalog 合并测试
-    └── test_executor.cpp   # 新增：Executor 测试
-```
-
-**依赖关系**:
-```
-LogicalType  ←  Value  ←  Row
-                      ↓
-                   Schema  ←  Table  ←  Catalog
-                                          ↓
-AST (parser)  ←─────────────────────── Executor
-```
-
-##### 1.3.2 类型系统 (LogicalType)
-
-```cpp
-// src/common/logical_type.h
-
-enum class LogicalTypeId {
-    SQL_NULL,
-    INTEGER,    // int32_t
-    BIGINT,     // int64_t
-    FLOAT,      // float
-    DOUBLE,     // double
-    VARCHAR,    // std::string
-    BOOLEAN,    // bool
-    // Future: DATE, TIMESTAMP, DECIMAL
-};
-
-class LogicalType {
-public:
-    explicit LogicalType(LogicalTypeId id = LogicalTypeId::SQL_NULL);
-    LogicalTypeId id() const;
-
-    bool isNumeric() const;
-    bool isInteger() const;
-    bool isFloating() const;
-    bool isString() const;
-    size_t fixedSize() const;  // 固定类型返回字节大小，变长返回0
-
-private:
-    LogicalTypeId id_;
-};
-```
-
-**设计要点**:
-- 区分数据库类型（INTEGER, DATE）与 C++ 存储类型（int32_t）
-- 为未来扩展预留空间（DATE, TIMESTAMP, DECIMAL）
-
-##### 1.3.3 Value 类
-
-```cpp
-// src/common/value.h
-
-class Value {
-public:
-    // 构造
-    Value();  // 默认 NULL
-    static Value null();
-    static Value integer(int32_t v);
-    static Value bigint(int64_t v);
-    static Value Float(float v);      // 避免与宏冲突
-    static Value Double(double v);
-    static Value varchar(std::string v);
-    static Value boolean(bool v);
-
-    // 类型查询
-    const LogicalType& type() const;
-    LogicalTypeId typeId() const;
-    bool isNull() const;
-
-    // 值访问（非 NULL 时调用）
-    int32_t asInt32() const;
-    int64_t asInt64() const;
-    float asFloat() const;
-    double asDouble() const;
-    const std::string& asString() const;
-    bool asBool() const;
-
-    // 比较
-    bool equals(const Value& other) const;
-    bool lessThan(const Value& other) const;
-
-    // 字符串表示（调试用）
-    std::string toString() const;
-
-private:
-    LogicalType type_;
-    bool is_null_ = true;
-    union Storage {
-        int32_t int32_val;
-        int64_t int64_val;
-        float float_val;
-        double double_val;
-        bool bool_val;
-    } storage_;
-    std::string str_val_;  // 字符串单独处理，不放在 union
-};
-```
-
-**设计要点**:
-- 字符串使用单独成员 `str_val_`，因为 `std::string` 有构造/析构函数
-- 类型比较需要先检查 `LogicalTypeId` 是否兼容
-- 预留 `equals`/`lessThan` 方法，为后续 WHERE 子句求值做准备
-- **与 parser::DataType 的关系**: Parser 的 `DataType` 用于 AST 阶段，`LogicalType` 用于执行阶段。Executor 负责将 `DataType` 转换为 `LogicalType`
-
-##### 1.3.4 Row 类
-
-```cpp
-// src/storage/row.h
-
-class Row {
-public:
-    Row() = default;
-    explicit Row(std::vector<Value> values);
-
-    // 访问
-    size_t size() const;
-    const Value& get(size_t idx) const;
-    Value& get(size_t idx);
-
-    // 修改
-    void append(Value value);
-    void set(size_t idx, Value value);
-
-    // 工具
-    bool empty() const;
-    void clear();
-    std::string toString() const;
-
-private:
-    std::vector<Value> values_;
-};
-```
-
-**设计要点**:
-- 简单的类型擦除容器，每个 `Value` 携带自己的 `LogicalType`
-- 与 Schema 解耦 —— Row 不知道自己属于哪个表，Schema 负责验证
-- 为向量化执行预留：未来可以添加 `RowBatch` 类包装 `std::vector<Row>`
-
-##### 1.3.5 Schema 类
-
-```cpp
-// src/storage/schema.h
-
-class ColumnSchema {
-public:
-    ColumnSchema(std::string name, LogicalType type, bool nullable = true);
-
-    const std::string& name() const;
-    const LogicalType& type() const;
-    bool isNullable() const;
-
-private:
-    std::string name_;
-    LogicalType type_;
-    bool nullable_;
-};
-
-class Schema {
-public:
-    Schema() = default;
-    explicit Schema(std::vector<ColumnSchema> columns);
-
-    // 列信息
-    size_t columnCount() const;
-    const ColumnSchema& column(size_t idx) const;
-    const ColumnSchema& column(const std::string& name) const;
-
-    // 查找
-    bool hasColumn(const std::string& name) const;
-    std::optional<size_t> columnIndex(const std::string& name) const;  // 找不到返回 nullopt
-
-    // 验证
-    bool validateRow(const Row& row) const;  // 检查列数、类型兼容性
-
-    // 工具
-    std::string toString() const;
-
-private:
-    std::vector<ColumnSchema> columns_;
-    std::unordered_map<std::string, size_t> name_to_index_;  // 列名 -> 索引缓存
-};
-```
-
-**设计要点**:
-- `ColumnSchema` 封装单列元信息：名称、类型、是否可空
-- `Schema` 维护列名到索引的哈希表，加速按名查找
-- `validateRow` 用于 INSERT 时验证数据合法性
-
-##### 1.3.6 Table 类
-
-```cpp
-// src/storage/table.h
-
-class Table {
-public:
-    Table(std::string name, Schema schema);
-
-    // 元信息
-    const std::string& name() const;
-    const Schema& schema() const;
-    size_t rowCount() const;
-
-    // 数据操作
-    void insert(Row row);
-    bool remove(size_t idx);  // 返回是否成功；注意：索引删除会影响后续索引
-    void update(size_t idx, Row row);
-
-    // 访问
-    const Row& get(size_t idx) const;
-
-    // 迭代器（支持 range-based for）
-    auto begin() const { return rows_.begin(); }
-    auto end() const { return rows_.end(); }
-
-    // 清空
-    void clear();
-
-private:
-    std::string name_;
-    Schema schema_;
-    std::vector<Row> rows_;
-};
-```
-
-**设计要点**:
-- 简单的内存存储，使用 `std::vector<Row>`
-- 当前阶段用物理删除（简单）
-- 支持迭代器，方便执行引擎遍历
-- 后续持久化阶段会替换底层存储结构
-
-##### 1.3.7 Catalog 类
-
-```cpp
-// src/storage/catalog.h
-
-class Catalog {
-public:
-    Catalog() = default;
-
-    // 表管理
-    bool createTable(std::string name, Schema schema);
-    bool dropTable(const std::string& name);
-    bool hasTable(const std::string& name) const;
-
-    // 表访问
-    Table* getTable(const std::string& name);
-    const Table* getTable(const std::string& name) const;
-
-    // 迭代所有表
-    auto begin() const { return tables_.begin(); }
-    auto end() const { return tables_.end(); }
-    size_t tableCount() const;
-
-private:
-    std::unordered_map<std::string, std::unique_ptr<Table>> tables_;
-};
-```
-
-**设计要点**:
-- 管理所有表的元数据容器
-- 使用 `unique_ptr<Table>` 保证指针稳定性（`unordered_map` 扩容时会移动元素）
-- 表名作为 key，支持快速查找
-- 后续可扩展：索引管理、视图、系统表等
-
-##### 1.3.8 Executor 执行引擎
-
-```cpp
-// src/executor/executor.h
-
-/// 执行结果 - 单行返回
-class ExecutionResult {
-public:
-    enum class Status { OK, ERROR, EMPTY };
-
-    static ExecutionResult ok(Row row);
-    static ExecutionResult error(ErrorCode code, std::string message);  // 使用现有 ErrorCode
-    static ExecutionResult empty();
-
-    Status status() const;
-    const Row& row() const;
-    ErrorCode errorCode() const;       // 错误码
-    const std::string& errorMessage() const;
-    bool hasRow() const;
-
-private:
-    Status status_;
-    std::optional<Row> row_;
-    ErrorCode error_code_ = ErrorCode::OK;  // 默认 OK
-    std::string error_message_;
-};
-
-/// 执行引擎
-class Executor {
-public:
-    explicit Executor(Catalog& catalog);
-
-    /// 执行 DDL (CREATE/DROP TABLE)
-    ExecutionResult execute(const CreateTableStmt& stmt);
-    ExecutionResult execute(const DropTableStmt& stmt);
-
-    /// 执行 DML (INSERT/SELECT/UPDATE/DELETE)
-    ExecutionResult execute(const InsertStmt& stmt);
-    ExecutionResult execute(const SelectStmt& stmt);  // 返回第一行，后续用迭代
-    ExecutionResult execute(const UpdateStmt& stmt);
-    ExecutionResult execute(const DeleteStmt& stmt);
-
-    /// 迭代查询结果（SELECT 后调用）
-    bool hasNext();
-    ExecutionResult next();
-    void resetQuery();  // 重置查询状态，准备新查询
-
-private:
-    Catalog& catalog_;
-    // 当前查询状态（SELECT 用）
-    const Table* current_query_table_ = nullptr;
-    size_t current_row_index_ = 0;
-};
-```
-
-**设计要点**:
-- 接收 AST 节点，执行对应操作
-- SELECT 使用迭代模型：首次调用返回第一行，后续通过 `hasNext()`/`next()` 遍历
-- `ExecutionResult` 封装执行状态，便于错误处理
-- 与 Parser 解耦 —— Executor 只依赖 AST 类型定义
-- 预留向量化接口：当前迭代器模型可无缝扩展为 batch 版本
 
 ##### 1.3.9 任务分解
 
@@ -673,54 +327,92 @@ tests/unit/
 - `Schema` + `Table` + `Catalog` 合并为 `test_storage.cpp`（三个类紧密相关）
 - `Executor` 保持独立（是集成测试，需要完整环境）
 
-#### 1.5 命令行工具（1 周）
+#### 1.5 命令行工具（1 周）✅ 已完成
 
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| C1-1 简单 REPL | 1 天 | 读取用户输入，输出结果 |
-| C1-2 SQL 执行集成 | 1 天 | REPL 中执行 SQL 并显示结果 |
-| C1-3 结果格式化输出 | 1 天 | 表格格式输出，对齐正确 |
-| C1-4 错误提示 | 1 天 | SQL 错误时显示友好提示 |
+> **完成日期**: 2026-03-18
 
-**里程碑验证**：命令行工具能交互式执行 SQL
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| C1-1 简单 REPL | 1 天 | 读取用户输入，输出结果 | ✅ |
+| C1-2 SQL 执行集成 | 1 天 | REPL 中执行 SQL 并显示结果 | ✅ |
+| C1-3 结果格式化输出 | 1 天 | 表格格式输出，对齐正确 | ✅ |
+| C1-4 错误提示 | 1 天 | SQL 错误时显示友好提示 | ✅ |
+
+**里程碑验证**：命令行工具能交互式执行 SQL ✅
 
 ---
 
-### Phase 2: 多线程 + PostgreSQL 协议（4 周）
+### Phase 2: SQL 功能增强（4-5 周）
 
-#### 2.1 线程框架（1 周）
+> **设计理念**：在进入持久化之前，完善 SQL 功能，使 CLI 工具能支持大部分常见 SQL 语句
 
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| T2-1 线程池实现 | 1 天 | 固定大小线程池，任务提交和执行 |
-| T2-2 Mutex 封装 | 0.5 天 | `Mutex`, `LockGuard` RAII 封装 |
-| T2-3 ConditionVariable 封装 | 0.5 天 | 条件变量封装 |
-| T2-4 线程安全队列 | 1 天 | 生产者-消费者模式测试通过 |
-| T2-5 并发测试 | 1 天 | 多线程插入/查询测试通过 |
-
-#### 2.2 连接管理（1 周）
+#### 2.1 结果集操作（1 周）
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| T2-6 Socket 监听 | 1 天 | 监听端口，接受连接 |
-| T2-7 Connection 类 | 1 天 | 封装 socket，读写操作 |
-| T2-8 Session 类 | 1 天 | 管理会话状态（当前数据库、事务等） |
-| T2-9 Connection-Session 映射 | 1 天 | 每个连接对应一个 Session |
+| F2-1 ORDER BY 实现 | 1.5 天 | `SELECT * FROM t ORDER BY a DESC, b ASC` |
+| F2-2 LIMIT/OFFSET 实现 | 0.5 天 | `SELECT * FROM t LIMIT 10 OFFSET 5` |
+| F2-3 列别名支持 | 0.5 天 | `SELECT a AS alias FROM t` |
+| F2-4 SELECT DISTINCT | 1 天 | `SELECT DISTINCT a, b FROM t` |
+| F2-5 表别名支持 | 0.5 天 | `SELECT t.a FROM users t` |
 
-#### 2.3 PostgreSQL 协议（2 周）
+#### 2.2 聚合与分组（1 周）
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| P2-1 消息读写框架 | 1 天 | 消息格式封装（类型+长度+内容） |
-| P2-2 Startup 消息处理 | 1 天 | 解析启动消息，返回认证成功 |
-| P2-3 Simple Query 协议 | 2 天 | 处理 Q 消息，返回结果 |
-| P2-4 RowDescription 消息 | 1 天 | 描述返回列的类型 |
-| P2-5 DataRow 消息 | 1 天 | 返回数据行 |
-| P2-6 CommandComplete 消息 | 0.5 天 | 返回命令完成状态 |
-| P2-7 ErrorResponse 消息 | 0.5 天 | 返回错误信息 |
-| P2-8 协议集成测试 | 1 天 | psql 连接成功，执行查询 |
+| F2-6 COUNT 聚合 | 1 天 | `SELECT COUNT(*), COUNT(a), COUNT(DISTINCT a) FROM t` |
+| F2-7 SUM/AVG 聚合 | 0.5 天 | `SELECT SUM(a), AVG(a) FROM t` |
+| F2-8 MIN/MAX 聚合 | 0.5 天 | `SELECT MIN(a), MAX(a) FROM t` |
+| F2-9 GROUP BY | 1 天 | `SELECT a, COUNT(*) FROM t GROUP BY a` |
+| F2-10 HAVING 子句 | 1 天 | `SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1` |
 
-**里程碑验证**：`psql -h localhost -p 5432` 连接成功并执行 SQL
+#### 2.3 表达式增强（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| F2-11 CASE WHEN 表达式 | 1.5 天 | `SELECT CASE WHEN a > 0 THEN 'positive' ELSE 'negative' END FROM t` |
+| F2-12 IN 操作符 | 0.5 天 | `SELECT * FROM t WHERE a IN (1, 2, 3)` |
+| F2-13 NOT IN 操作符 | 0.5 天 | `SELECT * FROM t WHERE a NOT IN (1, 2, 3)` |
+| F2-14 BETWEEN 操作符 | 0.5 天 | `SELECT * FROM t WHERE a BETWEEN 1 AND 10` |
+| F2-15 LIKE 模式匹配 | 1 天 | `SELECT * FROM t WHERE name LIKE 'prefix%'` |
+| F2-16 NULL 处理增强 | 0.5 天 | `COALESCE(a, b, 'default')`, `NULLIF(a, 0)` |
+
+#### 2.4 内置函数（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| F2-17 字符串函数 | 1.5 天 | `LENGTH`, `UPPER`, `LOWER`, `TRIM`, `SUBSTRING`, `CONCAT` |
+| F2-18 数学函数 | 1 天 | `ABS`, `ROUND`, `CEIL`, `FLOOR`, `MOD` |
+| F2-19 类型转换 | 1 天 | `CAST(a AS INTEGER)`, `CAST(b AS VARCHAR)` |
+| F2-20 函数框架 | 0.5 天 | 可扩展的函数注册机制 |
+
+#### 2.5 基础 JOIN（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| F2-21 CROSS JOIN | 0.5 天 | `SELECT * FROM a, b` 或 `SELECT * FROM a CROSS JOIN b` |
+| F2-22 INNER JOIN | 1.5 天 | `SELECT * FROM a INNER JOIN b ON a.id = b.aid` |
+| F2-23 LEFT JOIN | 1 天 | `SELECT * FROM a LEFT JOIN b ON a.id = b.aid` |
+| F2-24 RIGHT JOIN | 0.5 天 | `SELECT * FROM a RIGHT JOIN b ON a.id = b.aid` |
+| F2-25 多表 JOIN | 1 天 | `SELECT * FROM a JOIN b ON ... JOIN c ON ...` |
+
+**Phase 2 里程碑验证**：
+```sql
+-- 复杂查询示例
+SELECT 
+    u.name,
+    COUNT(o.id) AS order_count,
+    COALESCE(SUM(o.amount), 0) AS total_amount,
+    CASE WHEN SUM(o.amount) > 1000 THEN 'VIP' ELSE 'Normal' END AS level
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE u.status IN ('active', 'premium')
+  AND u.name LIKE 'A%'
+GROUP BY u.id, u.name
+HAVING COUNT(o.id) > 0
+ORDER BY total_amount DESC
+LIMIT 10;
+```
 
 ---
 
@@ -769,67 +461,118 @@ tests/unit/
 
 ---
 
-### Phase 4: 事务系统（6 周）
+### Phase 4: 基础恢复机制（2 周）
 
-#### 4.1 事务框架（1 周）
+> **设计理念**：在添加网络协议之前，确保数据持久化和崩溃恢复能力
 
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| X4-1 事务 ID 生成器 | 0.5 天 | 全局递增事务 ID |
-| X4-2 Transaction 对象 | 1 天 | 事务状态、ID、开始时间戳 |
-| X4-3 TransactionManager | 1 天 | BEGIN/COMMIT/ROLLBACK 管理 |
-| X4-4 事务状态机 | 1 天 | 状态转换正确 |
-| X4-5 事务隔离级别 | 0.5 天 | 支持 READ COMMITTED |
-
-#### 4.2 MVCC（2 周）
+#### 4.1 WAL 基础（2 周）
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| M4-1 版本链设计 | 1 天 | 每行指向旧版本的指针 |
-| M4-2 xmin/xmax 字段 | 1 天 | 创建/删除事务 ID |
-| M4-3 ReadView | 2 天 | 快照，判断可见性 |
-| M4-4 可见性判断算法 | 2 天 | 正确判断行对事务是否可见 |
-| M4-5 版本垃圾回收 (VACUUM) | 1 天 | 清理旧版本（简化版） |
-
-#### 4.3 锁管理器（2 周）
-
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| L4-1 Lock Request | 0.5 天 | 锁请求对象 |
-| L4-2 Lock Manager 框架 | 1 天 | 锁表管理 |
-| L4-3 表锁实现 | 2 天 | S锁/X锁 |
-| L4-4 行锁实现 | 2 天 | 行级共享/排他锁 |
-| L4-5 锁等待队列 | 1 天 | 等待中的锁请求 |
-| L4-6 死锁检测 (超时) | 1 天 | 简单超时机制 |
-| L4-7 锁管理器并发测试 | 1 天 | 多事务并发测试 |
-
-#### 4.4 WAL（2 周）
-
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| W4-1 LSN 设计 | 0.5 天 | 日志序列号 |
-| W4-2 WAL 日志格式 | 1 天 | 日志记录类型和结构 |
+| W4-1 LSN 设计 | 0.5 天 | 日志序列号生成 |
+| W4-2 WAL 日志格式 | 1 天 | 日志记录类型和结构定义 |
 | W4-3 日志写入 | 1 天 | 追加写入日志文件 |
 | W4-4 日志刷盘 | 0.5 天 | fsync 确保持久化 |
-| W4-5 Checkpoint | 2 天 | 检查点机制 |
+| W4-5 简单 Checkpoint | 1 天 | 定期刷新脏页 |
 | W4-6 Redo 恢复 | 2 天 | 重放日志恢复数据 |
 | W4-7 恢复测试 | 1 天 | 模拟崩溃恢复测试 |
 
-**里程碑验证**：支持完整 ACID 事务，崩溃后能恢复
+**里程碑验证**：数据库崩溃后能自动恢复到一致状态
 
 ---
 
-### Phase 5: 功能完善（持续演进）
+### Phase 5: 多线程 + PostgreSQL 协议（4 周）
+
+> **设计理念**：在持久化完成后，添加网络协议支持，使数据库可被标准客户端访问
+
+#### 5.1 线程框架（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| T5-1 线程池实现 | 1 天 | 固定大小线程池，任务提交和执行 |
+| T5-2 Mutex 封装 | 0.5 天 | `Mutex`, `LockGuard` RAII 封装 |
+| T5-3 ConditionVariable 封装 | 0.5 天 | 条件变量封装 |
+| T5-4 线程安全队列 | 1 天 | 生产者-消费者模式测试通过 |
+| T5-5 并发测试 | 1 天 | 多线程插入/查询测试通过 |
+
+#### 5.2 连接管理（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| T5-6 Socket 监听 | 1 天 | 监听端口，接受连接 |
+| T5-7 Connection 类 | 1 天 | 封装 socket，读写操作 |
+| T5-8 Session 类 | 1 天 | 管理会话状态（当前数据库、事务等） |
+| T5-9 Connection-Session 映射 | 1 天 | 每个连接对应一个 Session |
+
+#### 5.3 PostgreSQL 协议（2 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| P5-1 消息读写框架 | 1 天 | 消息格式封装（类型+长度+内容） |
+| P5-2 Startup 消息处理 | 1 天 | 解析启动消息，返回认证成功 |
+| P5-3 Simple Query 协议 | 2 天 | 处理 Q 消息，返回结果 |
+| P5-4 RowDescription 消息 | 1 天 | 描述返回列的类型 |
+| P5-5 DataRow 消息 | 1 天 | 返回数据行 |
+| P5-6 CommandComplete 消息 | 0.5 天 | 返回命令完成状态 |
+| P5-7 ErrorResponse 消息 | 0.5 天 | 返回错误信息 |
+| P5-8 协议集成测试 | 1 天 | psql 连接成功，执行查询 |
+
+**里程碑验证**：`psql -h localhost -p 5432` 连接成功，数据持久化
+
+---
+
+### Phase 6: 完整事务系统（4 周）
+
+> **设计理念**：在持久化和网络协议完成后，实现完整的 MVCC 事务支持
+
+#### 6.1 事务框架（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| X6-1 事务 ID 生成器 | 0.5 天 | 全局递增事务 ID |
+| X6-2 Transaction 对象 | 1 天 | 事务状态、ID、开始时间戳 |
+| X6-3 TransactionManager | 1 天 | BEGIN/COMMIT/ROLLBACK 管理 |
+| X6-4 事务状态机 | 1 天 | 状态转换正确 |
+| X6-5 事务隔离级别 | 0.5 天 | 支持 READ COMMITTED |
+
+#### 6.2 MVCC（2 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| M6-1 版本链设计 | 1 天 | 每行指向旧版本的指针 |
+| M6-2 xmin/xmax 字段 | 1 天 | 创建/删除事务 ID |
+| M6-3 ReadView | 2 天 | 快照，判断可见性 |
+| M6-4 可见性判断算法 | 2 天 | 正确判断行对事务是否可见 |
+| M6-5 版本垃圾回收 (VACUUM) | 1 天 | 清理旧版本（简化版） |
+
+#### 6.3 锁管理器（1 周）
+
+| 任务 | 预计 | 验证标准 |
+|------|------|----------|
+| L6-1 Lock Request | 0.5 天 | 锁请求对象 |
+| L6-2 Lock Manager 框架 | 1 天 | 锁表管理 |
+| L6-3 表锁实现 | 1 天 | S锁/X锁 |
+| L6-4 行锁实现 | 1 天 | 行级共享/排他锁 |
+| L6-5 锁等待与死锁检测 | 1 天 | 等待队列 + 超时机制 |
+
+**里程碑验证**：支持完整 ACID 事务，多客户端并发访问正确
+
+---
+
+### Phase 7: 高级功能（持续演进）
 
 | 功能 | 预计 | 验证标准 |
 |------|------|----------|
-| ORDER BY | 1 周 | `SELECT * FROM t ORDER BY a` |
-| LIMIT/OFFSET | 0.5 周 | `SELECT * FROM t LIMIT 10` |
-| 聚合函数 | 2 周 | COUNT/SUM/AVG/MIN/MAX |
-| GROUP BY | 1 周 | `SELECT a, COUNT(*) FROM t GROUP BY a` |
-| Hash Join | 2 周 | `SELECT * FROM a JOIN b ON a.id = b.id` |
-| Nested Loop Join | 1 周 | 小表 join |
-| 子查询 | 2 周 | `SELECT * FROM t WHERE a IN (SELECT b FROM s)` |
+| 子查询 (标量) | 1 周 | `SELECT (SELECT MAX(b) FROM t2) FROM t1` |
+| 子查询 (IN/EXISTS) | 1.5 周 | `SELECT * FROM t WHERE a IN (SELECT b FROM s)` |
+| 子查询 (FROM 子句) | 1 周 | `SELECT * FROM (SELECT a, b FROM t) AS sub` |
+| Hash Join 优化 | 1 周 | 大表 JOIN 性能优化 |
+| 索引扫描优化 | 1 周 | 使用 B+ 树索引加速 WHERE 条件 |
+| 简单查询优化器 | 2 周 | 基于规则的查询重写 (谓词下推、常量折叠) |
+| UNION/INTERSECT/EXCEPT | 1 周 | 集合操作 |
+| 窗口函数基础 | 2 周 | `ROW_NUMBER() OVER (ORDER BY a)` |
+| CREATE INDEX | 1 周 | `CREATE INDEX idx ON t(a)` |
+| 日期时间函数 | 1 周 | `NOW()`, `DATE_ADD`, `DATE_FORMAT` |
 
 ---
 
@@ -842,9 +585,9 @@ tests/unit/
 
 ---
 
-## 5. SQL 语法支持（Phase 1 范围）
+## 5. SQL 语法支持
 
-### 5.1 DDL
+### 5.1 DDL（Phase 1）
 ```sql
 CREATE TABLE table_name (
     column_name data_type [NULL | NOT NULL],
@@ -854,32 +597,72 @@ CREATE TABLE table_name (
 DROP TABLE table_name;
 ```
 
-### 5.2 DML
+### 5.2 DML 基础（Phase 1）
 ```sql
 INSERT INTO table_name (col1, col2, ...) VALUES (val1, val2, ...);
 
-SELECT col1, col2, ... FROM table_name
-WHERE condition
-ORDER BY col [ASC | DESC]
-LIMIT n;
+SELECT col1, col2, ... FROM table_name WHERE condition;
 
 UPDATE table_name SET col = value WHERE condition;
 
 DELETE FROM table_name WHERE condition;
 ```
 
-### 5.3 支持的数据类型
+### 5.3 DML 增强（Phase 2）
+```sql
+-- 结果集操作
+SELECT DISTINCT col1, col2 FROM t ORDER BY col1 DESC, col2 ASC LIMIT 10 OFFSET 5;
+
+-- 聚合与分组
+SELECT col1, COUNT(*), SUM(col2), AVG(col2)
+FROM t
+GROUP BY col1
+HAVING COUNT(*) > 1;
+
+-- 表达式
+SELECT 
+    CASE WHEN a > 0 THEN 'positive' ELSE 'negative' END,
+    COALESCE(b, 'default'),
+    CAST(c AS INTEGER)
+FROM t
+WHERE a IN (1, 2, 3) 
+  AND b BETWEEN 10 AND 20
+  AND name LIKE 'prefix%';
+
+-- JOIN
+SELECT a.*, b.col
+FROM table_a a
+INNER JOIN table_b b ON a.id = b.a_id
+LEFT JOIN table_c c ON a.id = c.a_id;
+```
+
+### 5.4 支持的数据类型
 - INTEGER (4 bytes)
 - BIGINT (8 bytes)
 - VARCHAR(n)
 - BOOLEAN
 - FLOAT / DOUBLE
 
-### 5.4 支持的表达式
+### 5.5 支持的表达式（Phase 1）
 - 比较操作: =, <>, <, >, <=, >=
 - 逻辑操作: AND, OR, NOT
 - 算术操作: +, -, *, /
 - NULL 判断: IS NULL, IS NOT NULL
+
+### 5.6 支持的表达式（Phase 2）
+- 条件表达式: CASE WHEN ... THEN ... ELSE ... END
+- 范围操作: IN, NOT IN, BETWEEN
+- 模式匹配: LIKE (支持 % 和 _ 通配符)
+- NULL 函数: COALESCE, NULLIF
+
+### 5.7 内置函数（Phase 2）
+
+| 类别 | 函数 |
+|------|------|
+| **字符串** | LENGTH, UPPER, LOWER, TRIM, SUBSTRING, CONCAT |
+| **数学** | ABS, ROUND, CEIL, FLOOR, MOD |
+| **类型转换** | CAST |
+| **聚合** | COUNT, SUM, AVG, MIN, MAX |
 
 ---
 
@@ -930,23 +713,27 @@ DELETE FROM table_name WHERE condition;
 | Phase 0 | 项目搭建、基础设施 | ✅ 完成 | 2026-03-11 |
 | Phase 1.1 | 词法分析器 (Lexer) | ✅ 完成 | 2026-03-12 |
 | Phase 1.2 | 语法分析器 (Parser) | ✅ 完成 | 2026-03-17 |
-| Phase 1.3-1.4 | 内存存储层 + 执行引擎 | 🔄 设计完成，待实现 | - |
-| Phase 1.5 | CLI 工具 | 📋 计划中 | - |
-| Phase 2 | 多线程 + PostgreSQL 协议 | 📋 计划中 | - |
+| Phase 1.3-1.4 | 内存存储层 + 执行引擎 | ✅ 完成 | 2026-03-18 |
+| Phase 1.5 | CLI 工具 (REPL) | ✅ 完成 | 2026-03-18 |
+| Phase 2 | SQL 功能增强 (JOIN/聚合/函数) | 📋 计划中 | - |
 | Phase 3 | B+ 树存储引擎 | 📋 计划中 | - |
-| Phase 4 | 事务系统 | 📋 计划中 | - |
-| Phase 5 | 功能完善 | 📋 计划中 | - |
+| Phase 4 | 基础恢复机制 (WAL) | 📋 计划中 | - |
+| Phase 5 | 多线程 + PostgreSQL 协议 | 📋 计划中 | - |
+| Phase 6 | 完整事务系统 (MVCC) | 📋 计划中 | - |
+| Phase 7 | 高级功能 (JOIN/子查询) | 📋 计划中 | - |
 
 ## 9. 下一步行动
 
 1. ~~**立即开始**：创建项目目录结构和 CMake 配置~~ ✅ 已完成
 2. ~~**当前目标**：Phase 1.1 - 词法分析器 (Lexer)~~ ✅ 已完成
 3. ~~**当前目标**：Phase 1.2 - 语法分析器 (Parser)~~ ✅ 已完成
-4. **当前目标**：Phase 1.3 - 内存存储层
-5. **第一个里程碑**：Phase 1 完成，能在内存中执行基础 SQL
-6. **第二个里程碑**：Phase 2 完成，能用 psql 连接
-7. **第三个里程碑**：Phase 3 完成，数据持久化到磁盘
-8. **第四个里程碑**：Phase 4 完成，支持完整事务
+4. ~~**当前目标**：Phase 1.3 - 内存存储层~~ ✅ 已完成
+5. ~~**当前目标**：Phase 1.5 - CLI 工具 (REPL)~~ ✅ 已完成
+6. **🎉 里程碑达成**：Phase 1 完成，能在内存中执行基础 SQL ✅
+7. **当前目标**：Phase 2 - SQL 功能增强（JOIN、聚合、内置函数、表达式）
+8. **第二个里程碑**：Phase 3 完成，数据持久化到磁盘
+9. **第三个里程碑**：Phase 5 完成，能用 psql 连接
+10. **第四个里程碑**：Phase 6 完成，支持完整 ACID 事务
 
 ---
 
