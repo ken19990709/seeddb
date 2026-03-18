@@ -8,6 +8,7 @@ target_link_libraries(seeddb_tests
         seeddb_common
         seeddb_parser
         seeddb_storage
+        seeddb_executor
 )
 
 # Enable CTest integration with Catch2
@@ -28,4 +29,5 @@ target_sources(seeddb_tests
         unit/parser/test_ast.cpp
         unit/parser/test_parser.cpp
         unit/storage/test_storage.cpp
+        unit/executor/test_executor.cpp
 )
