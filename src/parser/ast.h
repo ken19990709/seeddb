@@ -56,6 +56,49 @@ struct DataTypeInfo {
     size_t length() const { return length_.value_or(0); }
 };
 
+/// Sort direction for ORDER BY
+enum class SortDirection {
+    ASC,
+    DESC
+};
+
+// Forward declarations
+class Expr;
+
+/// ORDER BY item
+struct OrderByItem {
+    std::unique_ptr<Expr> expr;
+    SortDirection direction = SortDirection::ASC;
+
+    OrderByItem();
+    OrderByItem(std::unique_ptr<Expr> e, SortDirection d = SortDirection::ASC);
+    ~OrderByItem();
+
+    // Move operations
+    OrderByItem(OrderByItem&&) = default;
+    OrderByItem& operator=(OrderByItem&&) = default;
+    OrderByItem(const OrderByItem&) = delete;
+    OrderByItem& operator=(const OrderByItem&) = delete;
+};
+
+/// SELECT item with optional alias
+struct SelectItem {
+    std::unique_ptr<Expr> expr;
+    std::string alias;
+
+    SelectItem();
+    SelectItem(std::unique_ptr<Expr> e, std::string a = "");
+    ~SelectItem();
+
+    bool hasAlias() const { return !alias.empty(); }
+
+    // Move operations
+    SelectItem(SelectItem&&) = default;
+    SelectItem& operator=(SelectItem&&) = default;
+    SelectItem(const SelectItem&) = delete;
+    SelectItem& operator=(const SelectItem&) = delete;
+};
+
 /// AST node base class
 class ASTNode {
 public:
@@ -274,21 +317,42 @@ public:
     std::string toString() const override;
 
     bool isSelectAll() const { return select_all_; }
-    const auto& columns() const { return columns_; }
+    bool isDistinct() const { return distinct_; }
+    const auto& selectItems() const { return select_items_; }
     const TableRef* fromTable() const { return from_table_.get(); }
     const Expr* whereClause() const { return where_clause_.get(); }
     bool hasWhere() const { return where_clause_ != nullptr; }
+    const auto& orderBy() const { return order_by_; }
+    bool hasOrderBy() const { return !order_by_.empty(); }
+    const auto& limit() const { return limit_; }
+    const auto& offset() const { return offset_; }
+    bool hasLimit() const { return limit_.has_value(); }
+    bool hasOffset() const { return offset_.has_value(); }
+
+    // Legacy accessor for backward compatibility
+    const auto& columns() const { return select_items_; }
 
     void setSelectAll(bool all) { select_all_ = all; }
-    void addColumn(std::unique_ptr<Expr> col) { columns_.push_back(std::move(col)); }
+    void setDistinct(bool distinct) { distinct_ = distinct; }
+    void addSelectItem(SelectItem item) { select_items_.push_back(std::move(item)); }
+    void addColumn(std::unique_ptr<Expr> col) {
+        select_items_.push_back(SelectItem(std::move(col), ""));
+    }
     void setFromTable(std::unique_ptr<TableRef> table) { from_table_ = std::move(table); }
     void setWhere(std::unique_ptr<Expr> where) { where_clause_ = std::move(where); }
+    void addOrderBy(OrderByItem item) { order_by_.push_back(std::move(item)); }
+    void setLimit(int64_t limit) { limit_ = limit; }
+    void setOffset(int64_t offset) { offset_ = offset; }
 
 private:
     bool select_all_ = false;
-    std::vector<std::unique_ptr<Expr>> columns_;
+    bool distinct_ = false;
+    std::vector<SelectItem> select_items_;
     std::unique_ptr<TableRef> from_table_;
     std::unique_ptr<Expr> where_clause_;
+    std::vector<OrderByItem> order_by_;
+    std::optional<int64_t> limit_;
+    std::optional<int64_t> offset_;
 };
 
 /// INSERT statement

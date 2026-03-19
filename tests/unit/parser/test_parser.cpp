@@ -374,3 +374,209 @@ TEST_CASE("Parser: Error handling", "[parser]") {
         REQUIRE_FALSE(result.error().message().empty());
     }
 }
+
+// ===== Result Set Operation Tests =====
+
+TEST_CASE("Parser: SELECT with column alias", "[parser]") {
+    SECTION("Column alias with AS") {
+        std::string sql = "SELECT id AS user_id, name AS username FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->selectItems().size() == 2);
+        REQUIRE(select->selectItems()[0].hasAlias());
+        REQUIRE(select->selectItems()[0].alias == "user_id");
+        REQUIRE(select->selectItems()[1].alias == "username");
+    }
+
+    SECTION("Column alias without AS") {
+        std::string sql = "SELECT id user_id FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->selectItems().size() == 1);
+        REQUIRE(select->selectItems()[0].hasAlias());
+        REQUIRE(select->selectItems()[0].alias == "user_id");
+    }
+}
+
+TEST_CASE("Parser: SELECT with table alias", "[parser]") {
+    SECTION("Table alias with AS") {
+        std::string sql = "SELECT t.id FROM users AS t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->fromTable()->hasAlias());
+        REQUIRE(select->fromTable()->alias() == "t");
+    }
+
+    SECTION("Table alias without AS") {
+        std::string sql = "SELECT t.id FROM users t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->fromTable()->hasAlias());
+        REQUIRE(select->fromTable()->alias() == "t");
+    }
+}
+
+TEST_CASE("Parser: SELECT DISTINCT", "[parser]") {
+    SECTION("DISTINCT single column") {
+        std::string sql = "SELECT DISTINCT name FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->isDistinct());
+    }
+
+    SECTION("DISTINCT multiple columns") {
+        std::string sql = "SELECT DISTINCT dept, role FROM employees";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->isDistinct());
+        REQUIRE(select->selectItems().size() == 2);
+    }
+
+    SECTION("DISTINCT *") {
+        std::string sql = "SELECT DISTINCT * FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->isDistinct());
+        REQUIRE(select->isSelectAll());
+    }
+}
+
+TEST_CASE("Parser: ORDER BY", "[parser]") {
+    SECTION("ORDER BY single column ASC") {
+        std::string sql = "SELECT * FROM users ORDER BY name";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasOrderBy());
+        REQUIRE(select->orderBy().size() == 1);
+        REQUIRE(select->orderBy()[0].direction == SortDirection::ASC);
+    }
+
+    SECTION("ORDER BY single column DESC") {
+        std::string sql = "SELECT * FROM users ORDER BY age DESC";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasOrderBy());
+        REQUIRE(select->orderBy().size() == 1);
+        REQUIRE(select->orderBy()[0].direction == SortDirection::DESC);
+    }
+
+    SECTION("ORDER BY multiple columns mixed directions") {
+        std::string sql = "SELECT * FROM users ORDER BY dept ASC, age DESC";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->orderBy().size() == 2);
+        REQUIRE(select->orderBy()[0].direction == SortDirection::ASC);
+        REQUIRE(select->orderBy()[1].direction == SortDirection::DESC);
+    }
+}
+
+TEST_CASE("Parser: LIMIT and OFFSET", "[parser]") {
+    SECTION("LIMIT only") {
+        std::string sql = "SELECT * FROM users LIMIT 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasLimit());
+        REQUIRE(select->limit().value() == 10);
+        REQUIRE_FALSE(select->hasOffset());
+    }
+
+    SECTION("LIMIT with OFFSET") {
+        std::string sql = "SELECT * FROM users LIMIT 10 OFFSET 5";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasLimit());
+        REQUIRE(select->limit().value() == 10);
+        REQUIRE(select->hasOffset());
+        REQUIRE(select->offset().value() == 5);
+    }
+}
+
+TEST_CASE("Parser: Combined clauses", "[parser]") {
+    SECTION("SELECT with WHERE, ORDER BY, LIMIT") {
+        std::string sql = "SELECT * FROM users WHERE age > 18 ORDER BY name LIMIT 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+        REQUIRE(select->hasOrderBy());
+        REQUIRE(select->hasLimit());
+    }
+
+    SECTION("SELECT DISTINCT with ORDER BY and LIMIT") {
+        std::string sql = "SELECT DISTINCT dept FROM employees ORDER BY dept LIMIT 5";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->isDistinct());
+        REQUIRE(select->hasOrderBy());
+        REQUIRE(select->hasLimit());
+    }
+}

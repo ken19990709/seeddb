@@ -3,6 +3,18 @@
 namespace seeddb {
 namespace parser {
 
+// OrderByItem implementation
+OrderByItem::OrderByItem() = default;
+OrderByItem::OrderByItem(std::unique_ptr<Expr> e, SortDirection d)
+    : expr(std::move(e)), direction(d) {}
+OrderByItem::~OrderByItem() = default;
+
+// SelectItem implementation
+SelectItem::SelectItem() = default;
+SelectItem::SelectItem(std::unique_ptr<Expr> e, std::string a)
+    : expr(std::move(e)), alias(std::move(a)) {}
+SelectItem::~SelectItem() = default;
+
 std::string LiteralExpr::toString() const {
     if (isNull()) return "NULL";
     if (isInt()) return std::to_string(asInt());
@@ -75,12 +87,18 @@ std::string DropTableStmt::toString() const {
 
 std::string SelectStmt::toString() const {
     std::string result = "SELECT ";
+    if (distinct_) {
+        result += "DISTINCT ";
+    }
     if (select_all_) {
         result += "*";
     } else {
-        for (size_t i = 0; i < columns_.size(); ++i) {
+        for (size_t i = 0; i < select_items_.size(); ++i) {
             if (i > 0) result += ", ";
-            result += columns_[i]->toString();
+            result += select_items_[i].expr->toString();
+            if (select_items_[i].hasAlias()) {
+                result += " AS " + select_items_[i].alias;
+            }
         }
     }
     if (from_table_) {
@@ -88,6 +106,20 @@ std::string SelectStmt::toString() const {
     }
     if (where_clause_) {
         result += " WHERE " + where_clause_->toString();
+    }
+    if (!order_by_.empty()) {
+        result += " ORDER BY ";
+        for (size_t i = 0; i < order_by_.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += order_by_[i].expr->toString();
+            result += (order_by_[i].direction == SortDirection::DESC) ? " DESC" : " ASC";
+        }
+    }
+    if (limit_.has_value()) {
+        result += " LIMIT " + std::to_string(limit_.value());
+    }
+    if (offset_.has_value()) {
+        result += " OFFSET " + std::to_string(offset_.value());
     }
     return result;
 }

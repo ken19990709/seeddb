@@ -274,19 +274,24 @@ Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
 
     auto stmt = std::make_unique<SelectStmt>();
 
+    // Optional DISTINCT
+    if (match(TokenType::DISTINCT)) {
+        stmt->setDistinct(true);
+    }
+
     // Parse columns
     if (check(TokenType::STAR)) {
         stmt->setSelectAll(true);
         consume();
     } else {
-        // Parse expression list
-        do {
-            auto expr = parseExpression();
-            if (!expr.is_ok()) {
-                return Result<std::unique_ptr<SelectStmt>>::err(expr.error());
-            }
-            stmt->addColumn(std::move(expr.value()));
-        } while (match(TokenType::COMMA));
+        // Parse select list with optional aliases
+        auto select_list = parseSelectList();
+        if (!select_list.is_ok()) {
+            return Result<std::unique_ptr<SelectStmt>>::err(select_list.error());
+        }
+        for (auto& item : select_list.value()) {
+            stmt->addSelectItem(std::move(item));
+        }
     }
 
     // FROM clause
@@ -309,7 +314,112 @@ Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
         stmt->setWhere(std::move(where.value()));
     }
 
+    // Optional ORDER BY
+    if (match(TokenType::ORDER)) {
+        if (!match(TokenType::BY)) {
+            return syntax_error<std::unique_ptr<SelectStmt>>("Expected BY after ORDER");
+        }
+        auto order_by = parseOrderByClause();
+        if (!order_by.is_ok()) {
+            return Result<std::unique_ptr<SelectStmt>>::err(order_by.error());
+        }
+        for (auto& item : order_by.value()) {
+            stmt->addOrderBy(std::move(item));
+        }
+    }
+
+    // Optional LIMIT/OFFSET
+    if (match(TokenType::LIMIT)) {
+        if (!check(TokenType::INTEGER_LIT)) {
+            return syntax_error<std::unique_ptr<SelectStmt>>("Expected integer after LIMIT");
+        }
+        int64_t limit = std::get<int64_t>(current_token_.value);
+        if (limit < 0) {
+            return syntax_error<std::unique_ptr<SelectStmt>>("LIMIT must be non-negative");
+        }
+        consume();
+        stmt->setLimit(limit);
+
+        // Optional OFFSET
+        if (match(TokenType::OFFSET)) {
+            if (!check(TokenType::INTEGER_LIT)) {
+                return syntax_error<std::unique_ptr<SelectStmt>>("Expected integer after OFFSET");
+            }
+            int64_t offset = std::get<int64_t>(current_token_.value);
+            if (offset < 0) {
+                return syntax_error<std::unique_ptr<SelectStmt>>("OFFSET must be non-negative");
+            }
+            consume();
+            stmt->setOffset(offset);
+        }
+    }
+
     return Result<std::unique_ptr<SelectStmt>>::ok(std::move(stmt));
+}
+
+// Parse a single select item (expression with optional alias)
+Result<SelectItem> Parser::parseSelectItem() {
+    auto expr = parseExpression();
+    if (!expr.is_ok()) {
+        return Result<SelectItem>::err(expr.error());
+    }
+
+    std::string alias;
+    // Optional AS alias or just alias
+    if (match(TokenType::AS)) {
+        if (!check(TokenType::IDENTIFIER)) {
+            return syntax_error<SelectItem>("Expected alias after AS");
+        }
+        alias = std::get<std::string>(current_token_.value);
+        consume();
+    } else if (check(TokenType::IDENTIFIER)) {
+        // Implicit alias (no AS keyword) - but only if it's not a keyword
+        // Check if next token could be a keyword that starts a clause
+        // We need to be careful here - only treat as alias if it's clearly not a clause keyword
+        // For simplicity, we support implicit alias with IDENTIFIER only
+        alias = std::get<std::string>(current_token_.value);
+        consume();
+    }
+
+    return Result<SelectItem>::ok(SelectItem(std::move(expr.value()), std::move(alias)));
+}
+
+// Parse comma-separated select list
+Result<std::vector<SelectItem>> Parser::parseSelectList() {
+    std::vector<SelectItem> items;
+
+    do {
+        auto item = parseSelectItem();
+        if (!item.is_ok()) {
+            return Result<std::vector<SelectItem>>::err(item.error());
+        }
+        items.push_back(std::move(item.value()));
+    } while (match(TokenType::COMMA));
+
+    return Result<std::vector<SelectItem>>::ok(std::move(items));
+}
+
+// Parse ORDER BY clause (after ORDER BY keywords)
+Result<std::vector<OrderByItem>> Parser::parseOrderByClause() {
+    std::vector<OrderByItem> items;
+
+    do {
+        auto expr = parseExpression();
+        if (!expr.is_ok()) {
+            return Result<std::vector<OrderByItem>>::err(expr.error());
+        }
+
+        SortDirection direction = SortDirection::ASC;
+        if (match(TokenType::DESC)) {
+            direction = SortDirection::DESC;
+        } else {
+            match(TokenType::ASC);  // Optional ASC keyword
+        }
+
+        items.push_back(OrderByItem(std::move(expr.value()), direction));
+    } while (match(TokenType::COMMA));
+
+    return Result<std::vector<OrderByItem>>::ok(std::move(items));
 }
 
 Result<std::unique_ptr<InsertStmt>> Parser::parseInsert() {
@@ -650,12 +760,16 @@ Result<std::unique_ptr<TableRef>> Parser::parseTableRef() {
     std::string name = std::move(std::get<std::string>(current_token_.value));
     consume();
 
-    // Optional alias - TableRef constructor handles empty alias
+    // Optional alias - with AS keyword or implicit
     std::string alias;
     if (match(TokenType::AS)) {
         if (!check(TokenType::IDENTIFIER)) {
             return syntax_error<std::unique_ptr<TableRef>>("Expected alias after AS");
         }
+        alias = std::move(std::get<std::string>(current_token_.value));
+        consume();
+    } else if (check(TokenType::IDENTIFIER)) {
+        // Implicit alias (no AS keyword)
         alias = std::move(std::get<std::string>(current_token_.value));
         consume();
     }

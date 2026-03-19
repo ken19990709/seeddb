@@ -69,6 +69,19 @@ TEST_CASE("Lexer: Keywords", "[lexer]") {
         REQUIRE(get_token(lexer.next_token()).type == TokenType::HAVING);
     }
 
+    SECTION("LIMIT/OFFSET keywords") {
+        Lexer lexer("LIMIT OFFSET");
+        REQUIRE(get_token(lexer.next_token()).type == TokenType::LIMIT);
+        REQUIRE(get_token(lexer.next_token()).type == TokenType::OFFSET);
+    }
+
+    SECTION("DISTINCT keyword") {
+        Lexer lexer("SELECT DISTINCT FROM");
+        REQUIRE(get_token(lexer.next_token()).type == TokenType::SELECT);
+        REQUIRE(get_token(lexer.next_token()).type == TokenType::DISTINCT);
+        REQUIRE(get_token(lexer.next_token()).type == TokenType::FROM);
+    }
+
     SECTION("Data type keywords") {
         Lexer lexer("INTEGER BIGINT SMALLINT FLOAT DOUBLE VARCHAR CHAR BOOLEAN");
         REQUIRE(get_token(lexer.next_token()).type == TokenType::INTEGER);

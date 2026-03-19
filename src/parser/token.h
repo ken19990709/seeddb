@@ -21,6 +21,8 @@ enum class TokenType {
 
     // ===== GROUP BY / ORDER BY =====
     GROUP, BY, ORDER, ASC, DESC, HAVING,
+    LIMIT, OFFSET,
+    DISTINCT,
 
     // ===== Subquery support =====
     EXISTS, IN, BETWEEN, LIKE, IS, AS, IF,

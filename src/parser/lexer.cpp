@@ -42,6 +42,9 @@ const char* token_type_name(TokenType type) {
         case TokenType::ASC: return "ASC";
         case TokenType::DESC: return "DESC";
         case TokenType::HAVING: return "HAVING";
+        case TokenType::LIMIT: return "LIMIT";
+        case TokenType::OFFSET: return "OFFSET";
+        case TokenType::DISTINCT: return "DISTINCT";
 
         case TokenType::EXISTS: return "EXISTS";
         case TokenType::IN: return "IN";

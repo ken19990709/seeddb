@@ -305,3 +305,116 @@ TEST_CASE("AST: DeleteStmt", "[ast]") {
         REQUIRE(stmt.hasWhere());
     }
 }
+
+TEST_CASE("AST: SortDirection enum", "[ast]") {
+    SECTION("ASC and DESC exist") {
+        REQUIRE(static_cast<int>(SortDirection::ASC) == 0);
+        REQUIRE(static_cast<int>(SortDirection::DESC) == 1);
+    }
+}
+
+TEST_CASE("AST: OrderByItem", "[ast]") {
+    SECTION("Default construction") {
+        OrderByItem item;
+        REQUIRE(item.expr == nullptr);
+        REQUIRE(item.direction == SortDirection::ASC);
+    }
+
+    SECTION("With expression and ASC direction") {
+        OrderByItem item(std::make_unique<ColumnRef>("name"), SortDirection::ASC);
+        REQUIRE(item.expr != nullptr);
+        REQUIRE(item.expr->type() == NodeType::EXPR_COLUMN_REF);
+        REQUIRE(item.direction == SortDirection::ASC);
+    }
+
+    SECTION("With expression and DESC direction") {
+        OrderByItem item(std::make_unique<ColumnRef>("age"), SortDirection::DESC);
+        REQUIRE(item.expr != nullptr);
+        REQUIRE(item.direction == SortDirection::DESC);
+    }
+}
+
+TEST_CASE("AST: SelectItem", "[ast]") {
+    SECTION("Default construction") {
+        SelectItem item;
+        REQUIRE(item.expr == nullptr);
+        REQUIRE(item.alias.empty());
+        REQUIRE_FALSE(item.hasAlias());
+    }
+
+    SECTION("With expression, no alias") {
+        SelectItem item(std::make_unique<ColumnRef>("name"));
+        REQUIRE(item.expr != nullptr);
+        REQUIRE(item.expr->type() == NodeType::EXPR_COLUMN_REF);
+        REQUIRE(item.alias.empty());
+        REQUIRE_FALSE(item.hasAlias());
+    }
+
+    SECTION("With expression and alias") {
+        SelectItem item(std::make_unique<ColumnRef>("name"), "username");
+        REQUIRE(item.expr != nullptr);
+        REQUIRE(item.hasAlias());
+        REQUIRE(item.alias == "username");
+    }
+}
+
+TEST_CASE("AST: SelectStmt with new fields", "[ast]") {
+    SECTION("DISTINCT flag") {
+        SelectStmt stmt;
+        REQUIRE_FALSE(stmt.isDistinct());
+        stmt.setDistinct(true);
+        REQUIRE(stmt.isDistinct());
+    }
+
+    SECTION("ORDER BY items") {
+        SelectStmt stmt;
+        REQUIRE_FALSE(stmt.hasOrderBy());
+
+        stmt.addOrderBy(OrderByItem(std::make_unique<ColumnRef>("name"), SortDirection::ASC));
+        stmt.addOrderBy(OrderByItem(std::make_unique<ColumnRef>("age"), SortDirection::DESC));
+
+        REQUIRE(stmt.hasOrderBy());
+        REQUIRE(stmt.orderBy().size() == 2);
+    }
+
+    SECTION("LIMIT and OFFSET") {
+        SelectStmt stmt;
+        REQUIRE_FALSE(stmt.hasLimit());
+        REQUIRE_FALSE(stmt.hasOffset());
+
+        stmt.setLimit(100);
+        stmt.setOffset(10);
+
+        REQUIRE(stmt.hasLimit());
+        REQUIRE(stmt.hasOffset());
+        REQUIRE(stmt.limit().value() == 100);
+        REQUIRE(stmt.offset().value() == 10);
+    }
+
+    SECTION("SelectItem with alias") {
+        SelectStmt stmt;
+        stmt.addSelectItem(SelectItem(std::make_unique<ColumnRef>("name"), "username"));
+
+        REQUIRE(stmt.selectItems().size() == 1);
+        REQUIRE(stmt.selectItems()[0].hasAlias());
+        REQUIRE(stmt.selectItems()[0].alias == "username");
+    }
+
+    SECTION("toString includes new clauses") {
+        SelectStmt stmt;
+        stmt.setDistinct(true);
+        stmt.addSelectItem(SelectItem(std::make_unique<ColumnRef>("name"), "username"));
+        stmt.setFromTable(std::make_unique<TableRef>("users", "u"));
+        stmt.addOrderBy(OrderByItem(std::make_unique<ColumnRef>("name"), SortDirection::DESC));
+        stmt.setLimit(10);
+        stmt.setOffset(5);
+
+        std::string result = stmt.toString();
+        REQUIRE(result.find("SELECT DISTINCT") != std::string::npos);
+        REQUIRE(result.find("AS username") != std::string::npos);
+        REQUIRE(result.find("ORDER BY") != std::string::npos);
+        REQUIRE(result.find("DESC") != std::string::npos);
+        REQUIRE(result.find("LIMIT 10") != std::string::npos);
+        REQUIRE(result.find("OFFSET 5") != std::string::npos);
+    }
+}

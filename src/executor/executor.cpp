@@ -1,5 +1,7 @@
 #include "executor/executor.h"
 
+#include <algorithm>
+
 #include "common/value.h"
 #include "storage/schema.h"
 
@@ -343,20 +345,93 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
 
     const Schema& schema = current_table_->schema();
 
-    // Find matching rows (apply WHERE clause)
+    // Build alias map for column names
+    std::unordered_map<std::string, std::string> alias_map;
+
+    // Build result schema for projected columns
+    std::vector<ColumnSchema> result_columns;
+    if (stmt.isSelectAll()) {
+        // SELECT * - use all columns from table
+        for (size_t i = 0; i < schema.columnCount(); ++i) {
+            result_columns.push_back(schema.column(i));
+        }
+    } else {
+        // Build result schema from select list
+        for (const auto& item : stmt.selectItems()) {
+            if (item.expr->type() == parser::NodeType::EXPR_COLUMN_REF) {
+                const auto* col_ref = static_cast<const parser::ColumnRef*>(item.expr.get());
+                const std::string& col_name = col_ref->column();
+
+                // Find column in schema
+                auto col_idx = schema.columnIndex(col_name);
+                if (col_idx.has_value()) {
+                    result_columns.push_back(schema.column(col_idx.value()));
+                    // Store alias if present
+                    if (item.hasAlias()) {
+                        alias_map[col_name] = item.alias;
+                    }
+                }
+            }
+        }
+    }
+    Schema result_schema(std::move(result_columns));
+
+    // Find matching rows and project them
     const parser::Expr* where_clause = stmt.whereClause();
 
     for (size_t i = 0; i < current_table_->rowCount(); ++i) {
         const Row& row = current_table_->get(i);
 
-        // If no WHERE clause, all rows match
-        if (!where_clause) {
-            matching_rows_.push_back(i);
-        } else {
-            // Apply WHERE clause filter
-            if (evaluateWhereClause(where_clause, row, schema)) {
-                matching_rows_.push_back(i);
+        // Apply WHERE clause filter
+        if (where_clause && !evaluateWhereClause(where_clause, row, schema)) {
+            continue;
+        }
+
+        // Project row
+        Row projected = projectRow(row, schema, stmt, alias_map);
+        result_rows_.push_back(std::move(projected));
+    }
+
+    // Apply DISTINCT if specified
+    if (stmt.isDistinct()) {
+        // Remove duplicates
+        std::vector<Row> unique_rows;
+        for (const auto& row : result_rows_) {
+            bool is_duplicate = false;
+            for (const auto& unique_row : unique_rows) {
+                if (rowsEqual(row, unique_row)) {
+                    is_duplicate = true;
+                    break;
+                }
             }
+            if (!is_duplicate) {
+                unique_rows.push_back(row);
+            }
+        }
+        result_rows_ = std::move(unique_rows);
+    }
+
+    // Apply ORDER BY if specified
+    if (stmt.hasOrderBy()) {
+        sortResultRows(stmt, alias_map, result_schema);
+    }
+
+    // Apply LIMIT and OFFSET
+    if (stmt.hasLimit() || stmt.hasOffset()) {
+        size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
+        size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
+
+        // Apply offset
+        if (offset >= result_rows_.size()) {
+            result_rows_.clear();
+        } else {
+            // Apply limit after offset  TODO: Optimize this later, could do it earlier.
+            size_t end_index = std::min(offset + limit, result_rows_.size());
+            std::vector<Row> limited_rows;
+            for (size_t i = offset; i < end_index; ++i) {
+                limited_rows.push_back(std::move(result_rows_[i]));
+            }
+            result_rows_ = std::move(limited_rows);
         }
     }
 
@@ -364,7 +439,7 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
 }
 
 bool Executor::hasNext() const {
-    return current_table_ != nullptr && current_row_index_ < matching_rows_.size();
+    return current_table_ != nullptr && current_row_index_ < result_rows_.size();
 }
 
 ExecutionResult Executor::next() {
@@ -375,20 +450,18 @@ ExecutionResult Executor::next() {
         );
     }
 
-    // Get the matching row
-    size_t row_idx = matching_rows_[current_row_index_];
-    const Row& row = current_table_->get(row_idx);
+    // Get the result row
+    Row row = std::move(result_rows_[current_row_index_]);
 
     // Advance to next row
     current_row_index_++;
 
-    // Return a copy of the row
-    return ExecutionResult::ok(Row(row));
+    return ExecutionResult::ok(std::move(row));
 }
 
 void Executor::resetQuery() {
     current_table_ = nullptr;
-    matching_rows_.clear();
+    result_rows_.clear();
     current_row_index_ = 0;
 }
 
@@ -655,6 +728,121 @@ Value Executor::evaluateExpr(const parser::Expr* expr, const Row& row, const Sch
         default:
             return Value::null();
     }
+}
+
+Row Executor::projectRow(const Row& row, const Schema& schema, const parser::SelectStmt& stmt,
+                        std::unordered_map<std::string, std::string>& alias_map) const {
+    (void)alias_map;  // Reserved for future alias resolution during projection
+    if (stmt.isSelectAll()) {
+        // SELECT * - return all columns
+        return Row(row);
+    }
+
+    // Project specific columns
+    std::vector<Value> projected_values;
+    for (const auto& item : stmt.selectItems()) {
+        Value val = evaluateExpr(item.expr.get(), row, schema);
+        projected_values.push_back(std::move(val));
+    }
+    return Row(std::move(projected_values));
+}
+
+bool Executor::rowsEqual(const Row& a, const Row& b) const {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); ++i) {
+        const Value& va = a.get(i);
+        const Value& vb = b.get(i);
+        
+        // NULLs are equal
+        if (va.isNull() && vb.isNull()) {
+            continue;
+        }
+        // One NULL, one not NULL - not equal
+        if (va.isNull() || vb.isNull()) {
+            return false;
+        }
+        // Compare values
+        if (!va.equals(vb)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int Executor::compareValues(const Value& a, const Value& b) const {
+    // NULL handling - NULLs sort last
+    if (a.isNull() && b.isNull()) {
+        return 0;
+    }
+    if (a.isNull()) {
+        return 1;  // NULL > non-NULL (NULLs last)
+    }
+    if (b.isNull()) {
+        return -1; // non-NULL < NULL (NULLs last)
+    }
+
+    // Compare based on type
+    if (a.lessThan(b)) {
+        return -1;
+    }
+    if (b.lessThan(a)) {
+        return 1;
+    }
+    return 0;  // Equal
+}
+
+void Executor::sortResultRows(const parser::SelectStmt& stmt,
+                               const std::unordered_map<std::string, std::string>& alias_map,
+                               const Schema& result_schema) {
+    const auto& order_by = stmt.orderBy();
+    
+    std::sort(result_rows_.begin(), result_rows_.end(),
+        [&](const Row& a, const Row& b) {
+            for (const auto& order_item : order_by) {
+                // Get the column name (could be alias or actual name)
+                std::string col_name;
+                if (order_item.expr->type() == parser::NodeType::EXPR_COLUMN_REF) {
+                    col_name = static_cast<const parser::ColumnRef*>(order_item.expr.get())->column();
+                }
+
+                // Check if it's an alias
+                std::string actual_col_name = col_name;
+                for (const auto& [orig, alias] : alias_map) {
+                    if (alias == col_name) {
+                        actual_col_name = orig;
+                        break;
+                    }
+                }
+
+                // Find column index in result schema
+                size_t col_idx = 0;
+                bool found = false;
+                for (size_t i = 0; i < result_schema.columnCount(); ++i) {
+                    if (result_schema.column(i).name() == actual_col_name) {
+                        col_idx = i;
+                        found = true;
+                        break;
+                    }
+                }
+                
+                // Skip if column not found in result schema
+                if (!found) {
+                    continue;
+                }
+
+                const Value& va = a.get(col_idx);
+                const Value& vb = b.get(col_idx);
+                
+                int cmp = compareValues(va, vb);
+                if (cmp != 0) {
+                    // Apply direction
+                    return (order_item.direction == parser::SortDirection::DESC) ? (cmp > 0) : (cmp < 0);
+                }
+            }
+            return false;  // All columns equal, maintain original order
+        });
 }
 
 } // namespace seeddb

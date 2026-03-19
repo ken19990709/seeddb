@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include "common/error.h"
 #include "common/logical_type.h"
@@ -205,10 +206,39 @@ private:
     /// @return The evaluated Value.
     Value evaluateExpr(const parser::Expr* expr, const Row& row, const Schema& schema) const;
 
+    /// Project columns from a row based on SELECT list.
+    /// @param row The source row.
+    /// @param schema The source schema.
+    /// @param stmt The SELECT statement.
+    /// @param alias_map Map of column names to aliases.
+    /// @return Projected row.
+    Row projectRow(const Row& row, const Schema& schema, const parser::SelectStmt& stmt,
+                   std::unordered_map<std::string, std::string>& alias_map) const;
+
+    /// Compare two rows for equality (for DISTINCT).
+    /// @param a First row.
+    /// @param b Second row.
+    /// @return true if rows are equal.
+    bool rowsEqual(const Row& a, const Row& b) const;
+
+    /// Compare two values for ordering.
+    /// @param a First value.
+    /// @param b Second value.
+    /// @return negative if a < b, 0 if equal, positive if a > b.
+    int compareValues(const Value& a, const Value& b) const;
+
+    /// Sort result rows based on ORDER BY clause.
+    /// @param stmt The SELECT statement.
+    /// @param alias_map Map of column names to aliases.
+    /// @param result_schema Schema of result rows.
+    void sortResultRows(const parser::SelectStmt& stmt,
+                        const std::unordered_map<std::string, std::string>& alias_map,
+                        const Schema& result_schema);
+
     // Query state for SELECT iteration
     Table* current_table_ = nullptr;           ///< Current table being queried.
-    std::vector<size_t> matching_rows_;        ///< Indices of rows matching WHERE clause.
-    size_t current_row_index_ = 0;             ///< Current position in matching_rows_.
+    std::vector<Row> result_rows_;             ///< Result rows (projected, distinct, sorted).
+    size_t current_row_index_ = 0;             ///< Current position in result_rows_.
 
     Catalog& catalog_;
 };

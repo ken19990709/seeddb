@@ -47,6 +47,9 @@ inline const std::unordered_map<std::string_view, TokenType> keywords = {
     {"ASC", TokenType::ASC},
     {"DESC", TokenType::DESC},
     {"HAVING", TokenType::HAVING},
+    {"LIMIT", TokenType::LIMIT},
+    {"OFFSET", TokenType::OFFSET},
+    {"DISTINCT", TokenType::DISTINCT},
 
     // Subquery support
     {"EXISTS", TokenType::EXISTS},

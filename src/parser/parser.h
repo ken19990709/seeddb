@@ -80,6 +80,12 @@ private:
     Result<std::unique_ptr<ColumnDef>> parseColumnDef();
     Result<DataTypeInfo> parseDataType();
 
+    // SELECT clause parsing
+    Result<SelectItem> parseSelectItem();
+    Result<std::vector<SelectItem>> parseSelectList();
+    Result<std::vector<OrderByItem>> parseOrderByClause();
+    Result<std::pair<int64_t, int64_t>> parseLimitOffsetClause();  // returns {limit, offset}
+
     // Error helper with location info
     template<typename T>
     Result<T> syntax_error(const std::string& message) const {
