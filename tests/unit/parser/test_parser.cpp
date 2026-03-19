@@ -580,3 +580,212 @@ TEST_CASE("Parser: Combined clauses", "[parser]") {
         REQUIRE(select->hasLimit());
     }
 }
+
+// ===== Aggregate Function Tests =====
+
+TEST_CASE("Parser: Aggregate expressions", "[parser]") {
+    SECTION("COUNT(*)") {
+        std::string sql = "SELECT COUNT(*) FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->selectItems().size() == 1);
+
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::COUNT);
+        REQUIRE(agg->isStar());
+        REQUIRE_FALSE(agg->isDistinct());
+    }
+
+    SECTION("COUNT(column)") {
+        std::string sql = "SELECT COUNT(name) FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::COUNT);
+        REQUIRE_FALSE(agg->isStar());
+        REQUIRE(agg->arg() != nullptr);
+    }
+
+    SECTION("COUNT(DISTINCT column)") {
+        std::string sql = "SELECT COUNT(DISTINCT category) FROM products";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::COUNT);
+        REQUIRE(agg->isDistinct());
+        REQUIRE_FALSE(agg->isStar());
+    }
+
+    SECTION("SUM aggregate") {
+        std::string sql = "SELECT SUM(amount) FROM orders";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::SUM);
+    }
+
+    SECTION("AVG aggregate") {
+        std::string sql = "SELECT AVG(price) FROM products";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::AVG);
+    }
+
+    SECTION("MIN aggregate") {
+        std::string sql = "SELECT MIN(age) FROM users";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::MIN);
+    }
+
+    SECTION("MAX aggregate") {
+        std::string sql = "SELECT MAX(salary) FROM employees";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* agg = dynamic_cast<const AggregateExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(agg != nullptr);
+        REQUIRE(agg->aggType() == AggregateType::MAX);
+    }
+
+    SECTION("Multiple aggregates in SELECT") {
+        std::string sql = "SELECT COUNT(*), SUM(amount), AVG(amount) FROM orders";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->selectItems().size() == 3);
+    }
+}
+
+TEST_CASE("Parser: GROUP BY clause", "[parser]") {
+    SECTION("GROUP BY single column") {
+        std::string sql = "SELECT category, COUNT(*) FROM products GROUP BY category";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasGroupBy());
+        REQUIRE(select->groupBy().size() == 1);
+    }
+
+    SECTION("GROUP BY multiple columns") {
+        std::string sql = "SELECT country, city, COUNT(*) FROM users GROUP BY country, city";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasGroupBy());
+        REQUIRE(select->groupBy().size() == 2);
+    }
+
+    SECTION("GROUP BY with WHERE") {
+        std::string sql = "SELECT status, COUNT(*) FROM orders WHERE amount > 100 GROUP BY status";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+        REQUIRE(select->hasGroupBy());
+    }
+}
+
+TEST_CASE("Parser: HAVING clause", "[parser]") {
+    SECTION("HAVING with aggregate condition") {
+        std::string sql = "SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 5";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasGroupBy());
+        REQUIRE(select->hasHaving());
+    }
+
+    SECTION("HAVING with multiple conditions") {
+        std::string sql = "SELECT dept, AVG(salary) FROM employees GROUP BY dept HAVING AVG(salary) > 50000 AND COUNT(*) >= 3";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasGroupBy());
+        REQUIRE(select->hasHaving());
+    }
+}
+
+TEST_CASE("Parser: Combined aggregate clauses", "[parser]") {
+    SECTION("SELECT with GROUP BY, HAVING, ORDER BY, LIMIT") {
+        std::string sql = "SELECT category, SUM(price) AS total FROM products WHERE active = true GROUP BY category HAVING SUM(price) > 100 ORDER BY total DESC LIMIT 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+        REQUIRE(select->hasGroupBy());
+        REQUIRE(select->hasHaving());
+        REQUIRE(select->hasOrderBy());
+        REQUIRE(select->hasLimit());
+    }
+}

@@ -19,10 +19,11 @@ TEST_CASE("AST: NodeType enum exists", "[ast]") {
     REQUIRE(static_cast<int>(NodeType::EXPR_LITERAL) == 8);
     REQUIRE(static_cast<int>(NodeType::EXPR_COLUMN_REF) == 9);
     REQUIRE(static_cast<int>(NodeType::EXPR_IS_NULL) == 10);
+    REQUIRE(static_cast<int>(NodeType::EXPR_AGGREGATE) == 11);
 
     // Definition types
-    REQUIRE(static_cast<int>(NodeType::COLUMN_DEF) == 11);
-    REQUIRE(static_cast<int>(NodeType::TABLE_REF) == 12);
+    REQUIRE(static_cast<int>(NodeType::COLUMN_DEF) == 12);
+    REQUIRE(static_cast<int>(NodeType::TABLE_REF) == 13);
 }
 
 TEST_CASE("AST: LiteralExpr", "[ast]") {

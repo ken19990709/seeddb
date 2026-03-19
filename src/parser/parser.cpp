@@ -314,6 +314,29 @@ Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
         stmt->setWhere(std::move(where.value()));
     }
 
+    // Optional GROUP BY
+    if (match(TokenType::GROUP)) {
+        if (!match(TokenType::BY)) {
+            return syntax_error<std::unique_ptr<SelectStmt>>("Expected BY after GROUP");
+        }
+        auto group_by = parseGroupByClause();
+        if (!group_by.is_ok()) {
+            return Result<std::unique_ptr<SelectStmt>>::err(group_by.error());
+        }
+        for (auto& expr : group_by.value()) {
+            stmt->addGroupBy(std::move(expr));
+        }
+    }
+
+    // Optional HAVING
+    if (match(TokenType::HAVING)) {
+        auto having = parseExpression();
+        if (!having.is_ok()) {
+            return Result<std::unique_ptr<SelectStmt>>::err(having.error());
+        }
+        stmt->setHaving(std::move(having.value()));
+    }
+
     // Optional ORDER BY
     if (match(TokenType::ORDER)) {
         if (!match(TokenType::BY)) {
@@ -692,6 +715,12 @@ Result<std::unique_ptr<Expr>> Parser::parseUnaryExpr() {
 }
 
 Result<std::unique_ptr<Expr>> Parser::parsePrimaryExpr() {
+    // Check for aggregate functions (COUNT, SUM, AVG, MIN, MAX)
+    if (check(TokenType::COUNT) || check(TokenType::SUM) || check(TokenType::AVG) ||
+        check(TokenType::MIN) || check(TokenType::MAX)) {
+        return parseAggregateExpr();
+    }
+
     // Literals
     if (check(TokenType::INTEGER_LIT)) {
         auto val = TokenValue{std::get<int64_t>(current_token_.value)};
@@ -776,6 +805,72 @@ Result<std::unique_ptr<TableRef>> Parser::parseTableRef() {
 
     return Result<std::unique_ptr<TableRef>>::ok(
         std::make_unique<TableRef>(std::move(name), std::move(alias)));
+}
+
+// Parse aggregate function expression
+Result<std::unique_ptr<Expr>> Parser::parseAggregateExpr() {
+    // Determine aggregate type
+    AggregateType agg_type;
+    switch (current_token_.type) {
+        case TokenType::COUNT: agg_type = AggregateType::COUNT; break;
+        case TokenType::SUM: agg_type = AggregateType::SUM; break;
+        case TokenType::AVG: agg_type = AggregateType::AVG; break;
+        case TokenType::MIN: agg_type = AggregateType::MIN; break;
+        case TokenType::MAX: agg_type = AggregateType::MAX; break;
+        default:
+            return syntax_error<std::unique_ptr<Expr>>("Expected aggregate function");
+    }
+    consume();  // consume function name
+
+    // Expect (
+    if (!match(TokenType::LPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected '(' after aggregate function");
+    }
+
+    // Check for COUNT(*)
+    if (agg_type == AggregateType::COUNT && check(TokenType::STAR)) {
+        consume();  // consume *
+        if (!match(TokenType::RPAREN)) {
+            return syntax_error<std::unique_ptr<Expr>>("Expected ')' after COUNT(*)");
+        }
+        return Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<AggregateExpr>(agg_type, nullptr, false, true));
+    }
+
+    // Check for DISTINCT modifier
+    bool is_distinct = false;
+    if (match(TokenType::DISTINCT)) {
+        is_distinct = true;
+    }
+
+    // Parse argument expression
+    auto arg = parseExpression();
+    if (!arg.is_ok()) {
+        return arg;
+    }
+
+    // Expect )
+    if (!match(TokenType::RPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected ')' after aggregate argument");
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(
+        std::make_unique<AggregateExpr>(agg_type, std::move(arg.value()), is_distinct, false));
+}
+
+// Parse GROUP BY clause
+Result<std::vector<std::unique_ptr<Expr>>> Parser::parseGroupByClause() {
+    std::vector<std::unique_ptr<Expr>> group_by;
+
+    do {
+        auto expr = parseExpression();
+        if (!expr.is_ok()) {
+            return Result<std::vector<std::unique_ptr<Expr>>>::err(expr.error());
+        }
+        group_by.push_back(std::move(expr.value()));
+    } while (match(TokenType::COMMA));
+
+    return Result<std::vector<std::unique_ptr<Expr>>>::ok(std::move(group_by));
 }
 
 // Placeholder implementation for parseAll()

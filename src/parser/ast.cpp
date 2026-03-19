@@ -41,6 +41,22 @@ std::string IsNullExpr::toString() const {
     return (expr_ ? expr_->toString() : "null") + (negated_ ? " IS NOT NULL" : " IS NULL");
 }
 
+std::string AggregateExpr::toString() const {
+    std::string result = functionName() + "(";
+    if (is_star_) {
+        result += "*";
+    } else {
+        if (distinct_) {
+            result += "DISTINCT ";
+        }
+        if (arg_) {
+            result += arg_->toString();
+        }
+    }
+    result += ")";
+    return result;
+}
+
 std::string data_type_to_string(DataType type) {
     switch (type) {
         case DataType::INT: return "INT";
@@ -106,6 +122,16 @@ std::string SelectStmt::toString() const {
     }
     if (where_clause_) {
         result += " WHERE " + where_clause_->toString();
+    }
+    if (!group_by_.empty()) {
+        result += " GROUP BY ";
+        for (size_t i = 0; i < group_by_.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += group_by_[i]->toString();
+        }
+    }
+    if (having_clause_) {
+        result += " HAVING " + having_clause_->toString();
     }
     if (!order_by_.empty()) {
         result += " ORDER BY ";

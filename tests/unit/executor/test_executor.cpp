@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "executor/executor.h"
 #include "common/error.h"
@@ -8,6 +9,7 @@
 #include "parser/ast.h"
 
 using namespace seeddb;
+using Catch::Approx;
 
 // =============================================================================
 // ExecutionResult Tests
@@ -1107,4 +1109,356 @@ TEST_CASE("Executor: DELETE no rows matched returns success", "[executor][dml][d
     ExecutionResult result = executor.execute(*delete_stmt);
     REQUIRE(result.status() == ExecutionResult::Status::EMPTY);
     REQUIRE(catalog.getTable("t")->rowCount() == 1);  // Row still exists
+}
+
+// =============================================================================
+// Aggregate Function Tests
+// =============================================================================
+
+// Helper to create a table with test data for aggregates
+static void createAggregateTestTable(Catalog& /*catalog*/, Executor& executor) {
+    // Create table: id (INT), category (VARCHAR), amount (DOUBLE)
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("sales");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "category", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "amount", parser::DataTypeInfo(parser::DataType::DOUBLE)));
+    executor.execute(*create_stmt);
+
+    // Insert test data
+    auto insert1 = std::make_unique<parser::InsertStmt>("sales");
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(std::string("A")));
+    insert1->addValues(std::make_unique<parser::LiteralExpr>(10.5));
+    executor.execute(*insert1);
+
+    auto insert2 = std::make_unique<parser::InsertStmt>("sales");
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(std::string("B")));
+    insert2->addValues(std::make_unique<parser::LiteralExpr>(20.0));
+    executor.execute(*insert2);
+
+    auto insert3 = std::make_unique<parser::InsertStmt>("sales");
+    insert3->addValues(std::make_unique<parser::LiteralExpr>(int64_t(3)));
+    insert3->addValues(std::make_unique<parser::LiteralExpr>(std::string("A")));
+    insert3->addValues(std::make_unique<parser::LiteralExpr>(15.5));
+    executor.execute(*insert3);
+
+    auto insert4 = std::make_unique<parser::InsertStmt>("sales");
+    insert4->addValues(std::make_unique<parser::LiteralExpr>(int64_t(4)));
+    insert4->addValues(std::make_unique<parser::LiteralExpr>(std::string("B")));
+    insert4->addValues(std::make_unique<parser::LiteralExpr>(25.0));
+    executor.execute(*insert4);
+
+    auto insert5 = std::make_unique<parser::InsertStmt>("sales");
+    insert5->addValues(std::make_unique<parser::LiteralExpr>(int64_t(5)));
+    insert5->addValues(std::make_unique<parser::LiteralExpr>(std::string("A")));
+    insert5->addValues(std::make_unique<parser::LiteralExpr>(5.0));
+    executor.execute(*insert5);
+}
+
+TEST_CASE("Executor: COUNT(*) aggregate", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT COUNT(*) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::COUNT, nullptr, false, true));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 1);
+    REQUIRE(result.row().get(0).asInt32() == 5);
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: COUNT(column) aggregate", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT COUNT(category) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::COUNT,
+        std::make_unique<parser::ColumnRef>("category")));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 1);
+    REQUIRE(result.row().get(0).asInt32() == 5);
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: SUM aggregate", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT SUM(amount) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::SUM,
+        std::make_unique<parser::ColumnRef>("amount")));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 1);
+    // 10.5 + 20.0 + 15.5 + 25.0 + 5.0 = 76.0
+    REQUIRE(result.row().get(0).asDouble() == Approx(76.0));
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: AVG aggregate", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT AVG(amount) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::AVG,
+        std::make_unique<parser::ColumnRef>("amount")));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 1);
+    // 76.0 / 5 = 15.2
+    REQUIRE(result.row().get(0).asDouble() == Approx(15.2));
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: MIN aggregate", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT MIN(amount) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::MIN,
+        std::make_unique<parser::ColumnRef>("amount")));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 1);
+    REQUIRE(result.row().get(0).asDouble() == Approx(5.0));
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: MAX aggregate", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT MAX(amount) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::MAX,
+        std::make_unique<parser::ColumnRef>("amount")));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 1);
+    REQUIRE(result.row().get(0).asDouble() == Approx(25.0));
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: GROUP BY single column", "[executor][aggregate][group_by]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT category, SUM(amount) FROM sales GROUP BY category
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::ColumnRef>("category"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::SUM,
+        std::make_unique<parser::ColumnRef>("amount")));
+    select->addGroupBy(std::make_unique<parser::ColumnRef>("category"));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    // Should have 2 groups: A and B
+    int count = 0;
+    while (executor.hasNext()) {
+        ExecutionResult result = executor.next();
+        REQUIRE(result.row().size() == 2);
+        std::string category = result.row().get(0).asString();
+        double sum = result.row().get(1).asDouble();
+
+        if (category == "A") {
+            // 10.5 + 15.5 + 5.0 = 31.0
+            REQUIRE(sum == Approx(31.0));
+        } else if (category == "B") {
+            // 20.0 + 25.0 = 45.0
+            REQUIRE(sum == Approx(45.0));
+        }
+        count++;
+    }
+    REQUIRE(count == 2);
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: GROUP BY with COUNT", "[executor][aggregate][group_by]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT category, COUNT(*) FROM sales GROUP BY category
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::ColumnRef>("category"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::COUNT, nullptr, false, true));
+    select->addGroupBy(std::make_unique<parser::ColumnRef>("category"));
+
+    REQUIRE(executor.prepareSelect(*select));
+
+    int count = 0;
+    while (executor.hasNext()) {
+        ExecutionResult result = executor.next();
+        std::string category = result.row().get(0).asString();
+        int32_t cnt = result.row().get(1).asInt32();
+
+        if (category == "A") {
+            REQUIRE(cnt == 3);
+        } else if (category == "B") {
+            REQUIRE(cnt == 2);
+        }
+        count++;
+    }
+    REQUIRE(count == 2);
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: GROUP BY with AVG", "[executor][aggregate][group_by]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT category, AVG(amount) FROM sales GROUP BY category
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::ColumnRef>("category"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::AVG,
+        std::make_unique<parser::ColumnRef>("amount")));
+    select->addGroupBy(std::make_unique<parser::ColumnRef>("category"));
+
+    REQUIRE(executor.prepareSelect(*select));
+
+    while (executor.hasNext()) {
+        ExecutionResult result = executor.next();
+        std::string category = result.row().get(0).asString();
+        double avg = result.row().get(1).asDouble();
+
+        if (category == "A") {
+            // (10.5 + 15.5 + 5.0) / 3 = 31.0 / 3 = 10.333...
+            REQUIRE(avg == Approx(31.0 / 3.0));
+        } else if (category == "B") {
+            // (20.0 + 25.0) / 2 = 22.5
+            REQUIRE(avg == Approx(22.5));
+        }
+    }
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: Multiple aggregates without GROUP BY", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT COUNT(*), SUM(amount), AVG(amount), MIN(amount), MAX(amount) FROM sales
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::COUNT, nullptr, false, true));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::SUM,
+        std::make_unique<parser::ColumnRef>("amount")));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::AVG,
+        std::make_unique<parser::ColumnRef>("amount")));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::MIN,
+        std::make_unique<parser::ColumnRef>("amount")));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::MAX,
+        std::make_unique<parser::ColumnRef>("amount")));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 5);
+    REQUIRE(result.row().get(0).asInt32() == 5);        // COUNT(*)
+    REQUIRE(result.row().get(1).asDouble() == Approx(76.0));  // SUM
+    REQUIRE(result.row().get(2).asDouble() == Approx(15.2));  // AVG
+    REQUIRE(result.row().get(3).asDouble() == Approx(5.0));   // MIN
+    REQUIRE(result.row().get(4).asDouble() == Approx(25.0));  // MAX
+
+    executor.resetQuery();
+}
+
+TEST_CASE("Executor: Aggregate with WHERE clause", "[executor][aggregate]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    createAggregateTestTable(catalog, executor);
+
+    // SELECT COUNT(*), SUM(amount) FROM sales WHERE category = 'A'
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("sales"));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::COUNT, nullptr, false, true));
+    select->addColumn(std::make_unique<parser::AggregateExpr>(
+        parser::AggregateType::SUM,
+        std::make_unique<parser::ColumnRef>("amount")));
+    select->setWhere(std::make_unique<parser::BinaryExpr>(
+        "=",
+        std::make_unique<parser::ColumnRef>("category"),
+        std::make_unique<parser::LiteralExpr>(std::string("A"))));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().size() == 2);
+    REQUIRE(result.row().get(0).asInt32() == 3);         // COUNT(*) for A
+    REQUIRE(result.row().get(1).asDouble() == Approx(31.0)); // SUM for A
+
+    executor.resetQuery();
 }

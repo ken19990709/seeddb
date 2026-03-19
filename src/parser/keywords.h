@@ -51,6 +51,13 @@ inline const std::unordered_map<std::string_view, TokenType> keywords = {
     {"OFFSET", TokenType::OFFSET},
     {"DISTINCT", TokenType::DISTINCT},
 
+    // Aggregate functions
+    {"COUNT", TokenType::COUNT},
+    {"SUM", TokenType::SUM},
+    {"AVG", TokenType::AVG},
+    {"MIN", TokenType::MIN},
+    {"MAX", TokenType::MAX},
+
     // Subquery support
     {"EXISTS", TokenType::EXISTS},
     {"IN", TokenType::IN},

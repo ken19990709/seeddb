@@ -24,6 +24,9 @@ enum class TokenType {
     LIMIT, OFFSET,
     DISTINCT,
 
+    // ===== Aggregate functions =====
+    COUNT, SUM, AVG, MIN, MAX,
+
     // ===== Subquery support =====
     EXISTS, IN, BETWEEN, LIKE, IS, AS, IF,
 

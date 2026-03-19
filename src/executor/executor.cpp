@@ -345,6 +345,41 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
 
     const Schema& schema = current_table_->schema();
 
+    // Check if this is an aggregate query
+    if (hasAggregates(stmt) || stmt.hasGroupBy()) {
+        // Process aggregate query
+        processAggregateQuery(stmt, schema);
+
+        // Build alias map and result schema for aggregate results
+        std::unordered_map<std::string, std::string> alias_map;
+        Schema result_schema = computeAggregateResultSchema(stmt, schema, alias_map);
+
+        // Apply ORDER BY if specified (on aggregate results)
+        if (stmt.hasOrderBy()) {
+            sortResultRows(stmt, alias_map, result_schema);
+        }
+
+        // Apply LIMIT and OFFSET
+        if (stmt.hasLimit() || stmt.hasOffset()) {
+            size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
+            size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
+
+            if (offset >= result_rows_.size()) {
+                result_rows_.clear();
+            } else {
+                size_t end_index = std::min(offset + limit, result_rows_.size());
+                std::vector<Row> limited_rows;
+                for (size_t i = offset; i < end_index; ++i) {
+                    limited_rows.push_back(std::move(result_rows_[i]));
+                }
+                result_rows_ = std::move(limited_rows);
+            }
+        }
+
+        return true;
+    }
+
+    // Non-aggregate query - original logic
     // Build alias map for column names
     std::unordered_map<std::string, std::string> alias_map;
 
@@ -843,6 +878,689 @@ void Executor::sortResultRows(const parser::SelectStmt& stmt,
             }
             return false;  // All columns equal, maintain original order
         });
+}
+
+// =============================================================================
+// Aggregate Helper Methods
+// =============================================================================
+
+bool Executor::hasAggregates(const parser::SelectStmt& stmt) const {
+    // Check SELECT list
+    for (const auto& item : stmt.selectItems()) {
+        if (exprHasAggregates(item.expr.get())) {
+            return true;
+        }
+    }
+    // Check HAVING clause
+    if (stmt.hasHaving() && exprHasAggregates(stmt.havingClause())) {
+        return true;
+    }
+    return false;
+}
+
+bool Executor::exprHasAggregates(const parser::Expr* expr) const {
+    if (!expr) {
+        return false;
+    }
+
+    switch (expr->type()) {
+        case parser::NodeType::EXPR_AGGREGATE:
+            return true;
+
+        case parser::NodeType::EXPR_BINARY: {
+            const auto* binary = static_cast<const parser::BinaryExpr*>(expr);
+            return exprHasAggregates(binary->left()) || exprHasAggregates(binary->right());
+        }
+
+        case parser::NodeType::EXPR_UNARY: {
+            const auto* unary = static_cast<const parser::UnaryExpr*>(expr);
+            return exprHasAggregates(unary->operand());
+        }
+
+        case parser::NodeType::EXPR_IS_NULL: {
+            const auto* is_null = static_cast<const parser::IsNullExpr*>(expr);
+            return exprHasAggregates(is_null->expr());
+        }
+
+        default:
+            return false;
+    }
+}
+
+GroupKey Executor::extractGroupKey(const Row& row, const Schema& schema,
+                                   const parser::SelectStmt& stmt) const {
+    GroupKey key;
+    for (const auto& group_expr : stmt.groupBy()) {
+        Value val = evaluateExpr(group_expr.get(), row, schema);
+        key.push_back(std::move(val));
+    }
+    return key;
+}
+
+std::unique_ptr<AggregateState> Executor::createAggregateState(const parser::SelectStmt& stmt) const {
+    auto state = std::make_unique<AggregateState>();
+    auto aggregates = collectAggregates(stmt);
+    for (const auto* agg : aggregates) {
+        state->addAccumulator(createAccumulator(agg));
+    }
+    return state;
+}
+
+std::unique_ptr<AggregateAccumulator> Executor::createAccumulator(const parser::AggregateExpr* agg) const {
+    switch (agg->aggType()) {
+        case parser::AggregateType::COUNT:
+            if (agg->isDistinct()) {
+                return std::make_unique<CountDistinctAccumulator>();
+            }
+            return std::make_unique<CountAccumulator>(agg->isStar());
+
+        case parser::AggregateType::SUM:
+            return std::make_unique<SumAccumulator>();
+
+        case parser::AggregateType::AVG:
+            return std::make_unique<AvgAccumulator>();
+
+        case parser::AggregateType::MIN:
+            return std::make_unique<MinAccumulator>();
+
+        case parser::AggregateType::MAX:
+            return std::make_unique<MaxAccumulator>();
+
+        default:
+            return std::make_unique<CountAccumulator>(true);
+    }
+}
+
+std::vector<const parser::AggregateExpr*> Executor::collectAggregates(const parser::SelectStmt& stmt) const {
+    std::vector<const parser::AggregateExpr*> aggregates;
+
+    // Collect from SELECT list
+    for (const auto& item : stmt.selectItems()) {
+        collectAggregatesFromExpr(item.expr.get(), aggregates);
+    }
+
+    // Collect from HAVING clause
+    if (stmt.hasHaving()) {
+        collectAggregatesFromExpr(stmt.havingClause(), aggregates);
+    }
+
+    return aggregates;
+}
+
+void Executor::collectAggregatesFromExpr(const parser::Expr* expr,
+                                         std::vector<const parser::AggregateExpr*>& aggregates) const {
+    if (!expr) {
+        return;
+    }
+
+    switch (expr->type()) {
+        case parser::NodeType::EXPR_AGGREGATE: {
+            const auto* agg = static_cast<const parser::AggregateExpr*>(expr);
+            aggregates.push_back(agg);
+            // Also recurse into aggregate argument
+            collectAggregatesFromExpr(agg->arg(), aggregates);
+            break;
+        }
+
+        case parser::NodeType::EXPR_BINARY: {
+            const auto* binary = static_cast<const parser::BinaryExpr*>(expr);
+            collectAggregatesFromExpr(binary->left(), aggregates);
+            collectAggregatesFromExpr(binary->right(), aggregates);
+            break;
+        }
+
+        case parser::NodeType::EXPR_UNARY: {
+            const auto* unary = static_cast<const parser::UnaryExpr*>(expr);
+            collectAggregatesFromExpr(unary->operand(), aggregates);
+            break;
+        }
+
+        case parser::NodeType::EXPR_IS_NULL: {
+            const auto* is_null = static_cast<const parser::IsNullExpr*>(expr);
+            collectAggregatesFromExpr(is_null->expr(), aggregates);
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
+void Executor::processAggregateQuery(const parser::SelectStmt& stmt, const Schema& schema) {
+    // Validate aggregate query constraints first
+    auto validation = validateAggregateQuery(stmt, schema);
+    if (validation.status() == ExecutionResult::Status::ERROR) {
+        result_rows_.clear();
+        throw std::runtime_error(validation.errorMessage());
+    }
+
+    // Collect all aggregates to determine order
+    auto aggregates = collectAggregates(stmt);
+
+    // Create template aggregate state
+    auto template_state = createAggregateState(stmt);
+
+    // Map from group key to aggregate state
+    std::unordered_map<GroupKey, std::unique_ptr<AggregateState>, GroupKeyHash, GroupKeyEqual> groups;
+
+    // Handle case with no GROUP BY (single implicit group)
+    bool has_group_by = stmt.hasGroupBy();
+
+    // Process all matching rows
+    const parser::Expr* where_clause = stmt.whereClause();
+
+    for (size_t i = 0; i < current_table_->rowCount(); ++i) {
+        const Row& row = current_table_->get(i);
+
+        // Apply WHERE clause filter
+        if (where_clause && !evaluateWhereClause(where_clause, row, schema)) {
+            continue;
+        }
+
+        // Extract group key (empty for no GROUP BY)
+        GroupKey key;
+        if (has_group_by) {
+            key = extractGroupKey(row, schema, stmt);
+        }
+
+        // Get or create group state
+        auto it = groups.find(key);
+        if (it == groups.end()) {
+            auto state = template_state->clone();
+            it = groups.emplace(key, std::move(state)).first;
+        }
+
+        // Accumulate values for each aggregate
+        for (size_t agg_idx = 0; agg_idx < aggregates.size(); ++agg_idx) {
+            const auto* agg = aggregates[agg_idx];
+
+            Value val;
+            if (agg->isStar()) {
+                // COUNT(*) - just pass a non-null value
+                val = Value::integer(1);
+            } else if (agg->arg()) {
+                val = evaluateExpr(agg->arg(), row, schema);
+            } else {
+                val = Value::null();
+            }
+            it->second->accumulate(agg_idx, val);
+        }
+    }
+
+    // Handle empty result (no rows matched WHERE)
+    if (groups.empty() && !has_group_by) {
+        // With no GROUP BY, still produce one row with aggregate of empty set
+        groups.emplace(GroupKey{}, template_state->clone());
+    }
+
+    // Finalize groups and build result rows
+    for (auto& [group_key, state] : groups) {
+        // Finalize aggregate values
+        auto agg_values = state->finalize();
+
+        // Apply HAVING filter if present
+        if (stmt.hasHaving()) {
+            Value having_result = evaluateExprWithAggregates(
+                stmt.havingClause(), group_key, agg_values, aggregates, stmt, schema);
+            if (having_result.isNull() || !having_result.asBool()) {
+                continue;  // Skip this group
+            }
+        }
+
+        // Build result row from SELECT list
+        std::vector<Value> row_values;
+        for (const auto& item : stmt.selectItems()) {
+            Value val = evaluateExprWithAggregates(
+                item.expr.get(), group_key, agg_values, aggregates, stmt, schema);
+            row_values.push_back(std::move(val));
+        }
+        result_rows_.push_back(Row(std::move(row_values)));
+    }
+}
+
+Value Executor::evaluateExprWithAggregates(const parser::Expr* expr,
+                                           const GroupKey& group_key,
+                                           const std::vector<Value>& agg_values,
+                                           const std::vector<const parser::AggregateExpr*>& aggregates,
+                                           const parser::SelectStmt& stmt,
+                                           const Schema& schema) const {
+    if (!expr) {
+        return Value::null();
+    }
+
+    switch (expr->type()) {
+        case parser::NodeType::EXPR_AGGREGATE: {
+            // Find this aggregate in our list and return its finalized value
+            const auto* agg = static_cast<const parser::AggregateExpr*>(expr);
+            for (size_t i = 0; i < aggregates.size(); ++i) {
+                if (aggregates[i] == agg) {
+                    return agg_values[i];
+                }
+            }
+            return Value::null();
+        }
+
+        case parser::NodeType::EXPR_COLUMN_REF: {
+            // Column reference - must be in GROUP BY
+            const auto* col_ref = static_cast<const parser::ColumnRef*>(expr);
+            const std::string& col_name = col_ref->column();
+
+            // Find in GROUP BY columns
+            for (size_t i = 0; i < stmt.groupBy().size(); ++i) {
+                const auto* group_expr = stmt.groupBy()[i].get();
+                if (group_expr->type() == parser::NodeType::EXPR_COLUMN_REF) {
+                    const auto* group_col = static_cast<const parser::ColumnRef*>(group_expr);
+                    if (group_col->column() == col_name) {
+                        if (i < group_key.size()) {
+                            return group_key[i];
+                        }
+                    }
+                }
+            }
+            // Not in GROUP BY - this should be caught by validation
+            return Value::null();
+        }
+
+        case parser::NodeType::EXPR_LITERAL: {
+            const auto* lit = static_cast<const parser::LiteralExpr*>(expr);
+            if (lit->isNull()) return Value::null();
+            if (lit->isInt()) return Value::bigint(lit->asInt());
+            if (lit->isFloat()) return Value::Double(lit->asFloat());
+            if (lit->isString()) return Value::varchar(lit->asString());
+            if (lit->isBool()) return Value::boolean(lit->asBool());
+            return Value::null();
+        }
+
+        case parser::NodeType::EXPR_BINARY: {
+            const auto* binary = static_cast<const parser::BinaryExpr*>(expr);
+            const std::string& op = binary->op();
+
+            Value left = evaluateExprWithAggregates(binary->left(), group_key, agg_values, aggregates, stmt, schema);
+            Value right = evaluateExprWithAggregates(binary->right(), group_key, agg_values, aggregates, stmt, schema);
+
+            // Reuse logic from evaluateExpr for operators
+            // Handle logical operators
+            if (op == "AND") {
+                if (left.isNull() || right.isNull()) return Value::null();
+                return Value::boolean(left.asBool() && right.asBool());
+            }
+            if (op == "OR") {
+                if (left.isNull() && right.isNull()) return Value::null();
+                if (left.isNull()) return Value::boolean(right.asBool());
+                if (right.isNull()) return Value::boolean(left.asBool());
+                return Value::boolean(left.asBool() || right.asBool());
+            }
+
+            if (left.isNull() || right.isNull()) return Value::null();
+
+            // Comparison operators
+            if (op == "=") return Value::boolean(left.equals(right));
+            if (op == "<>" || op == "!=") return Value::boolean(!left.equals(right));
+            if (op == "<") return Value::boolean(left.lessThan(right));
+            if (op == ">") return Value::boolean(right.lessThan(left));
+            if (op == "<=") return Value::boolean(left.lessThan(right) || left.equals(right));
+            if (op == ">=") return Value::boolean(right.lessThan(left) || left.equals(right));
+
+            // Arithmetic operators - simplified
+            auto toDouble = [](const Value& v) -> double {
+                switch (v.typeId()) {
+                    case LogicalTypeId::INTEGER: return v.asInt32();
+                    case LogicalTypeId::BIGINT: return static_cast<double>(v.asInt64());
+                    case LogicalTypeId::FLOAT: return v.asFloat();
+                    case LogicalTypeId::DOUBLE: return v.asDouble();
+                    default: return 0.0;
+                }
+            };
+
+            double l = toDouble(left), r = toDouble(right);
+            if (op == "+") return Value::Double(l + r);
+            if (op == "-") return Value::Double(l - r);
+            if (op == "*") return Value::Double(l * r);
+            if (op == "/") {
+                if (r == 0.0) return Value::null();
+                return Value::Double(l / r);
+            }
+
+            return Value::null();
+        }
+
+        case parser::NodeType::EXPR_UNARY: {
+            const auto* unary = static_cast<const parser::UnaryExpr*>(expr);
+            Value operand = evaluateExprWithAggregates(unary->operand(), group_key, agg_values, aggregates, stmt, schema);
+
+            if (unary->op() == "NOT") {
+                if (operand.isNull()) return Value::null();
+                return Value::boolean(!operand.asBool());
+            }
+            if (unary->op() == "-") {
+                if (operand.isNull()) return Value::null();
+                if (operand.typeId() == LogicalTypeId::DOUBLE) return Value::Double(-operand.asDouble());
+                if (operand.typeId() == LogicalTypeId::BIGINT) return Value::bigint(-operand.asInt64());
+                if (operand.typeId() == LogicalTypeId::INTEGER) return Value::integer(-operand.asInt32());
+            }
+            return operand;
+        }
+
+        default:
+            return Value::null();
+    }
+}
+
+// =============================================================================
+// Aggregate Validation Methods
+// =============================================================================
+
+ExecutionResult Executor::validateAggregateQuery(const parser::SelectStmt& stmt,
+                                                  const Schema& schema) const {
+    // Collect all aggregates in the query
+    auto aggregates = collectAggregates(stmt);
+
+    // If no aggregates, no validation needed
+    if (aggregates.empty() && !stmt.hasGroupBy()) {
+        return ExecutionResult::empty();
+    }
+
+    // Validate type constraints for each aggregate (SUM/AVG require numeric)
+    for (const auto* agg : aggregates) {
+        std::string error_msg;
+        if (!validateAggregateTypeConstraint(agg, schema, error_msg)) {
+            return ExecutionResult::error(ErrorCode::TYPE_MISMATCH, error_msg);
+        }
+    }
+
+    // If we have aggregates or GROUP BY, validate GROUP BY constraints
+    // (unused variable removed)
+
+    // Validate SELECT list: non-aggregate columns must be in GROUP BY
+    for (const auto& col : stmt.columns()) {
+        std::string error_msg;
+        if (!validateExprGroupByConstraint(col.expr.get(), stmt, error_msg)) {
+            return ExecutionResult::error(ErrorCode::SYNTAX_ERROR, error_msg);
+        }
+    }
+
+    // Validate HAVING clause if present
+    if (stmt.hasHaving()) {
+        std::string error_msg;
+        if (!validateExprGroupByConstraint(stmt.havingClause(), stmt, error_msg)) {
+            return ExecutionResult::error(ErrorCode::SYNTAX_ERROR, 
+                                          "HAVING clause: " + error_msg);
+        }
+    }
+
+    // Validate ORDER BY clause if present
+    if (stmt.hasOrderBy()) {
+        for (const auto& order_expr : stmt.orderBy()) {
+            std::string error_msg;
+            if (!validateExprGroupByConstraint(order_expr.expr.get(), stmt, error_msg)) {
+                return ExecutionResult::error(ErrorCode::SYNTAX_ERROR, 
+                                              "ORDER BY clause: " + error_msg);
+            }
+        }
+    }
+
+    return ExecutionResult::empty();  // Validation passed
+}
+
+bool Executor::isColumnInGroupBy(const std::string& col_name,
+                                  const parser::SelectStmt& stmt) const {
+    if (!stmt.hasGroupBy()) {
+        return false;
+    }
+
+    for (const auto& group_expr : stmt.groupBy()) {
+        if (group_expr->type() == parser::NodeType::EXPR_COLUMN_REF) {
+            const auto* col = static_cast<const parser::ColumnRef*>(group_expr.get());
+            if (col->column() == col_name) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool Executor::validateExprGroupByConstraint(const parser::Expr* expr,
+                                              const parser::SelectStmt& stmt,
+                                              std::string& error_msg) const {
+    if (!expr) return true;
+
+    // Check if we have any aggregates in the query
+    auto aggregates = collectAggregates(stmt);
+    bool has_aggregates = !aggregates.empty();
+    bool has_group_by = stmt.hasGroupBy();
+
+    // If no aggregates and no GROUP BY, no constraint to enforce
+    if (!has_aggregates && !has_group_by) {
+        return true;
+    }
+
+    switch (expr->type()) {
+        case parser::NodeType::EXPR_AGGREGATE:
+            // Aggregate expressions are always valid in aggregate context
+            return true;
+
+        case parser::NodeType::EXPR_COLUMN_REF: {
+            const auto* col = static_cast<const parser::ColumnRef*>(expr);
+            // Column must be in GROUP BY when we have aggregates
+            if (has_aggregates || has_group_by) {
+                if (!isColumnInGroupBy(col->column(), stmt)) {
+                    error_msg = "column '" + col->column() +
+                                "' must appear in the GROUP BY clause or be used in an aggregate function";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        case parser::NodeType::EXPR_BINARY: {
+            const auto* bin = static_cast<const parser::BinaryExpr*>(expr);
+            if (!validateExprGroupByConstraint(bin->left(), stmt, error_msg)) {
+                return false;
+            }
+            return validateExprGroupByConstraint(bin->right(), stmt, error_msg);
+        }
+
+        case parser::NodeType::EXPR_UNARY: {
+            const auto* unary = static_cast<const parser::UnaryExpr*>(expr);
+            return validateExprGroupByConstraint(unary->operand(), stmt, error_msg);
+        }
+
+        case parser::NodeType::EXPR_LITERAL:
+            // Literals are always valid
+            return true;
+
+        default:
+            return true;
+    }
+}
+
+bool Executor::validateAggregateTypeConstraint(const parser::AggregateExpr* agg,
+                                                const Schema& schema,
+                                                std::string& error_msg) const {
+    if (!agg) return true;
+
+    // COUNT doesn't have type constraints
+    if (agg->aggType() == parser::AggregateType::COUNT) {
+        return true;
+    }
+
+    // MIN/MAX work with any comparable type
+    if (agg->aggType() == parser::AggregateType::MIN ||
+        agg->aggType() == parser::AggregateType::MAX) {
+        return true;
+    }
+
+    // SUM and AVG require numeric types
+    if (agg->aggType() == parser::AggregateType::SUM ||
+        agg->aggType() == parser::AggregateType::AVG) {
+        const auto* arg = agg->arg();
+        if (!arg) {
+            error_msg = agg->functionName() + " requires an argument";
+            return false;
+        }
+
+        // If argument is a column, check its type
+        if (arg->type() == parser::NodeType::EXPR_COLUMN_REF) {
+            const auto* col = static_cast<const parser::ColumnRef*>(arg);
+            if (schema.hasColumn(col->column())) {
+                LogicalTypeId type_id = schema.column(col->column()).type().id();
+                if (type_id != LogicalTypeId::INTEGER &&
+                    type_id != LogicalTypeId::DOUBLE) {
+                    error_msg = agg->functionName() + " requires a numeric argument, but column '" +
+                                col->column() + "' is not numeric";
+                    return false;
+                }
+            }
+        }
+        // For other expression types (literals, binary), we assume they're valid
+        // since they would fail at runtime if types don't match
+    }
+
+    return true;
+}
+
+// =============================================================================
+// Aggregate Result Schema Methods
+// =============================================================================
+
+Schema Executor::computeAggregateResultSchema(const parser::SelectStmt& stmt,
+                                               const Schema& source_schema,
+                                               std::unordered_map<std::string, std::string>& alias_map) const {
+    std::vector<ColumnSchema> result_columns;
+
+    for (const auto& item : stmt.selectItems()) {
+        const parser::Expr* expr = item.expr.get();
+        std::string col_name;
+        LogicalType col_type(LogicalTypeId::VARCHAR);
+
+        // Check if alias is provided
+        if (item.hasAlias()) {
+            col_name = item.alias;
+        }
+
+        // Handle different expression types
+        if (expr->type() == parser::NodeType::EXPR_AGGREGATE) {
+            const auto* agg = static_cast<const parser::AggregateExpr*>(expr);
+
+            // Generate name if no alias
+            if (col_name.empty()) {
+                col_name = generateAggregateName(agg);
+            }
+
+            // Infer type
+            col_type = inferAggregateType(agg, source_schema);
+
+            // Store alias mapping
+            alias_map[col_name] = col_name;
+
+        } else if (expr->type() == parser::NodeType::EXPR_COLUMN_REF) {
+            const auto* col = static_cast<const parser::ColumnRef*>(expr);
+
+            // Use column name if no alias
+            if (col_name.empty()) {
+                col_name = col->column();
+            }
+
+            // Get type from source schema
+            if (source_schema.hasColumn(col->column())) {
+                col_type = source_schema.column(col->column()).type();
+            }
+
+            // Store alias mapping
+            alias_map[col_name] = col->column();
+        } else {
+            // For other expressions, use a generic name
+            if (col_name.empty()) {
+                col_name = "expr";
+            }
+        }
+
+        result_columns.emplace_back(col_name, col_type, true);
+    }
+
+    return Schema(std::move(result_columns));
+}
+
+LogicalType Executor::inferAggregateType(const parser::AggregateExpr* agg,
+                                          const Schema& source_schema) const {
+    switch (agg->aggType()) {
+        case parser::AggregateType::COUNT:
+            // COUNT always returns INTEGER
+            return LogicalType(LogicalTypeId::INTEGER);
+
+        case parser::AggregateType::AVG:
+            // AVG always returns DOUBLE
+            return LogicalType(LogicalTypeId::DOUBLE);
+
+        case parser::AggregateType::SUM: {
+            // SUM returns same type as input (or DOUBLE if input is DOUBLE)
+            const auto* arg = agg->arg();
+            if (arg && arg->type() == parser::NodeType::EXPR_COLUMN_REF) {
+                const auto* col = static_cast<const parser::ColumnRef*>(arg);
+                if (source_schema.hasColumn(col->column())) {
+                    LogicalTypeId type_id = source_schema.column(col->column()).type().id();
+                    if (type_id == LogicalTypeId::DOUBLE) {
+                        return LogicalType(LogicalTypeId::DOUBLE);
+                    }
+                }
+            }
+            // Default to INTEGER for SUM
+            return LogicalType(LogicalTypeId::INTEGER);
+        }
+
+        case parser::AggregateType::MIN:
+        case parser::AggregateType::MAX: {
+            // MIN/MAX return same type as input
+            const auto* arg = agg->arg();
+            if (arg && arg->type() == parser::NodeType::EXPR_COLUMN_REF) {
+                const auto* col = static_cast<const parser::ColumnRef*>(arg);
+                if (source_schema.hasColumn(col->column())) {
+                    return source_schema.column(col->column()).type();
+                }
+            }
+            // Default to VARCHAR if can't determine
+            return LogicalType(LogicalTypeId::VARCHAR);
+        }
+
+        default:
+            return LogicalType(LogicalTypeId::VARCHAR);
+    }
+}
+
+std::string Executor::generateAggregateName(const parser::AggregateExpr* agg) const {
+    std::string name;
+
+    // Get function name
+    switch (agg->aggType()) {
+        case parser::AggregateType::COUNT: name = "COUNT"; break;
+        case parser::AggregateType::SUM:   name = "SUM";   break;
+        case parser::AggregateType::AVG:   name = "AVG";   break;
+        case parser::AggregateType::MIN:   name = "MIN";   break;
+        case parser::AggregateType::MAX:   name = "MAX";   break;
+    }
+
+    name += "(";
+
+    // Handle DISTINCT
+    if (agg->isDistinct()) {
+        name += "DISTINCT ";
+    }
+
+    // Handle argument
+    if (agg->isStar()) {
+        name += "*";
+    } else if (agg->arg()) {
+        // Get argument as string
+        if (agg->arg()->type() == parser::NodeType::EXPR_COLUMN_REF) {
+            const auto* col = static_cast<const parser::ColumnRef*>(agg->arg());
+            name += col->column();
+        } else {
+            name += "expr";
+        }
+    }
+
+    name += ")";
+    return name;
 }
 
 } // namespace seeddb

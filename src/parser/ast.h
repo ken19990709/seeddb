@@ -27,9 +27,19 @@ enum class NodeType {
     EXPR_LITERAL,
     EXPR_COLUMN_REF,
     EXPR_IS_NULL,
+    EXPR_AGGREGATE,
     // Definitions
     COLUMN_DEF,
     TABLE_REF
+};
+
+/// Aggregate function types
+enum class AggregateType {
+    COUNT,
+    SUM,
+    AVG,
+    MIN,
+    MAX
 };
 
 /// Data type enumeration
@@ -233,6 +243,53 @@ private:
     bool negated_;
 };
 
+/// Aggregate function expression (COUNT, SUM, AVG, MIN, MAX)
+class AggregateExpr : public Expr {
+public:
+    /// Construct an aggregate expression
+    /// @param agg_type The aggregate function type
+    /// @param arg The argument expression (nullptr for COUNT(*))
+    /// @param distinct Whether DISTINCT modifier is used
+    /// @param is_star Whether COUNT(*) was used
+    AggregateExpr(AggregateType agg_type, std::unique_ptr<Expr> arg,
+                  bool distinct = false, bool is_star = false)
+        : agg_type_(agg_type), arg_(std::move(arg)),
+          distinct_(distinct), is_star_(is_star) {}
+
+    NodeType type() const override { return NodeType::EXPR_AGGREGATE; }
+    std::string toString() const override;
+
+    /// Get the aggregate function type
+    AggregateType aggType() const { return agg_type_; }
+
+    /// Get the argument expression (may be nullptr for COUNT(*))
+    const Expr* arg() const { return arg_.get(); }
+
+    /// Check if DISTINCT modifier is used
+    bool isDistinct() const { return distinct_; }
+
+    /// Check if this is COUNT(*)
+    bool isStar() const { return is_star_; }
+
+    /// Get the function name as string
+    std::string functionName() const {
+        switch (agg_type_) {
+            case AggregateType::COUNT: return "COUNT";
+            case AggregateType::SUM: return "SUM";
+            case AggregateType::AVG: return "AVG";
+            case AggregateType::MIN: return "MIN";
+            case AggregateType::MAX: return "MAX";
+        }
+        return "UNKNOWN";
+    }
+
+private:
+    AggregateType agg_type_;
+    std::unique_ptr<Expr> arg_;
+    bool distinct_;
+    bool is_star_;
+};
+
 /// Column definition
 class ColumnDef : public ASTNode {
 public:
@@ -322,6 +379,10 @@ public:
     const TableRef* fromTable() const { return from_table_.get(); }
     const Expr* whereClause() const { return where_clause_.get(); }
     bool hasWhere() const { return where_clause_ != nullptr; }
+    const auto& groupBy() const { return group_by_; }
+    bool hasGroupBy() const { return !group_by_.empty(); }
+    const Expr* havingClause() const { return having_clause_.get(); }
+    bool hasHaving() const { return having_clause_ != nullptr; }
     const auto& orderBy() const { return order_by_; }
     bool hasOrderBy() const { return !order_by_.empty(); }
     const auto& limit() const { return limit_; }
@@ -340,6 +401,8 @@ public:
     }
     void setFromTable(std::unique_ptr<TableRef> table) { from_table_ = std::move(table); }
     void setWhere(std::unique_ptr<Expr> where) { where_clause_ = std::move(where); }
+    void addGroupBy(std::unique_ptr<Expr> expr) { group_by_.push_back(std::move(expr)); }
+    void setHaving(std::unique_ptr<Expr> having) { having_clause_ = std::move(having); }
     void addOrderBy(OrderByItem item) { order_by_.push_back(std::move(item)); }
     void setLimit(int64_t limit) { limit_ = limit; }
     void setOffset(int64_t offset) { offset_ = offset; }
@@ -350,6 +413,8 @@ private:
     std::vector<SelectItem> select_items_;
     std::unique_ptr<TableRef> from_table_;
     std::unique_ptr<Expr> where_clause_;
+    std::vector<std::unique_ptr<Expr>> group_by_;
+    std::unique_ptr<Expr> having_clause_;
     std::vector<OrderByItem> order_by_;
     std::optional<int64_t> limit_;
     std::optional<int64_t> offset_;

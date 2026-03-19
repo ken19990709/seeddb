@@ -358,15 +358,17 @@ tests/unit/
 | F2-4 SELECT DISTINCT | 1 天 | `SELECT DISTINCT a, b FROM t` | ✅ |
 | F2-5 表别名支持 | 0.5 天 | `SELECT t.a FROM users t` | ✅ |
 
-#### 2.2 聚合与分组（1 周）
+#### 2.2 聚合与分组（1 周）✅ 已完成
 
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| F2-6 COUNT 聚合 | 1 天 | `SELECT COUNT(*), COUNT(a), COUNT(DISTINCT a) FROM t` |
-| F2-7 SUM/AVG 聚合 | 0.5 天 | `SELECT SUM(a), AVG(a) FROM t` |
-| F2-8 MIN/MAX 聚合 | 0.5 天 | `SELECT MIN(a), MAX(a) FROM t` |
-| F2-9 GROUP BY | 1 天 | `SELECT a, COUNT(*) FROM t GROUP BY a` |
-| F2-10 HAVING 子句 | 1 天 | `SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1` |
+> **完成日期**: 2026-03-19
+
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| F2-6 COUNT 聚合 | 1 天 | `SELECT COUNT(*), COUNT(a), COUNT(DISTINCT a) FROM t` | ✅ |
+| F2-7 SUM/AVG 聚合 | 0.5 天 | `SELECT SUM(a), AVG(a) FROM t` | ✅ |
+| F2-8 MIN/MAX 聚合 | 0.5 天 | `SELECT MIN(a), MAX(a) FROM t` | ✅ |
+| F2-9 GROUP BY | 1 天 | `SELECT a, COUNT(*) FROM t GROUP BY a` | ✅ |
+| F2-10 HAVING 子句 | 1 天 | `SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1` | ✅ |
 
 #### 2.3 表达式增强（1 周）
 
@@ -718,7 +720,8 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 | Phase 1.3-1.4 | 内存存储层 + 执行引擎 | ✅ 完成 | 2026-03-18 |
 | Phase 1.5 | CLI 工具 (REPL) | ✅ 完成 | 2026-03-18 |
 | Phase 2.1 | 结果集操作 (ORDER BY/LIMIT/DISTINCT/别名) | ✅ 完成 | 2026-03-19 |
-| Phase 2.2-2.5 | SQL 功能增强 (聚合/函数/JOIN) | 📋 计划中 | - |
+| Phase 2.2 | 聚合与分组 (COUNT/SUM/AVG/MIN/MAX/GROUP BY/HAVING) | ✅ 完成 | 2026-03-19 |
+| Phase 2.3-2.5 | SQL 功能增强 (表达式/函数/JOIN) | 📋 计划中 | - |
 | Phase 3 | B+ 树存储引擎 | 📋 计划中 | - |
 | Phase 4 | 基础恢复机制 (WAL) | 📋 计划中 | - |
 | Phase 5 | 多线程 + PostgreSQL 协议 | 📋 计划中 | - |
@@ -734,11 +737,12 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 5. ~~**当前目标**：Phase 1.5 - CLI 工具 (REPL)~~ ✅ 已完成
 6. ~~**当前目标**：Phase 2.1 - 结果集操作 (ORDER BY/LIMIT/DISTINCT/别名)~~ ✅ 已完成
 7. **🎉 里程碑达成**：Phase 1 完成，能在内存中执行基础 SQL ✅
-8. **当前目标**：Phase 2.2 - 聚合与分组 (COUNT/SUM/AVG/MIN/MAX/GROUP BY/HAVING)
-9. **后续目标**：Phase 2.3-2.5 - 表达式增强、内置函数、JOIN
-10. **第二个里程碑**：Phase 3 完成，数据持久化到磁盘
-11. **第三个里程碑**：Phase 5 完成，能用 psql 连接
-12. **第四个里程碑**：Phase 6 完成，支持完整 ACID 事务
+8. ~~**当前目标**：Phase 2.2 - 聚合与分组 (COUNT/SUM/AVG/MIN/MAX/GROUP BY/HAVING)~~ ✅ 已完成
+9. **当前目标**：Phase 2.3 - 表达式增强 (CASE WHEN/IN/BETWEEN/LIKE/COALESCE)
+10. **后续目标**：Phase 2.4-2.5 - 内置函数、JOIN
+11. **第二个里程碑**：Phase 3 完成，数据持久化到磁盘
+12. **第三个里程碑**：Phase 5 完成，能用 psql 连接
+13. **第四个里程碑**：Phase 6 完成，支持完整 ACID 事务
 
 ---
 

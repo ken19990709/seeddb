@@ -10,6 +10,7 @@
 #include "storage/row.h"
 #include "storage/catalog.h"
 #include "parser/ast.h"
+#include "executor/aggregate.h"
 
 namespace seeddb {
 
@@ -234,6 +235,129 @@ private:
     void sortResultRows(const parser::SelectStmt& stmt,
                         const std::unordered_map<std::string, std::string>& alias_map,
                         const Schema& result_schema);
+
+    // =========================================================================
+    // Aggregate Helper Methods
+    // =========================================================================
+
+    /// Check if the SELECT statement contains aggregate functions.
+    /// @param stmt The SELECT statement.
+    /// @return true if aggregates are present.
+    bool hasAggregates(const parser::SelectStmt& stmt) const;
+
+    /// Check if an expression contains aggregate functions.
+    /// @param expr The expression to check.
+    /// @return true if the expression contains aggregates.
+    bool exprHasAggregates(const parser::Expr* expr) const;
+
+    /// Extract group key from a row based on GROUP BY columns.
+    /// @param row The source row.
+    /// @param schema The source schema.
+    /// @param stmt The SELECT statement.
+    /// @return The group key.
+    GroupKey extractGroupKey(const Row& row, const Schema& schema,
+                             const parser::SelectStmt& stmt) const;
+
+    /// Create accumulators for all aggregates in the query.
+    /// @param stmt The SELECT statement.
+    /// @return Template AggregateState with configured accumulators.
+    std::unique_ptr<AggregateState> createAggregateState(const parser::SelectStmt& stmt) const;
+
+    /// Create an accumulator for a specific aggregate expression.
+    /// @param agg The aggregate expression.
+    /// @return The accumulator.
+    std::unique_ptr<AggregateAccumulator> createAccumulator(const parser::AggregateExpr* agg) const;
+
+    /// Collect aggregates from the SELECT list and HAVING clause.
+    /// @param stmt The SELECT statement.
+    /// @return Vector of aggregate expressions.
+    std::vector<const parser::AggregateExpr*> collectAggregates(const parser::SelectStmt& stmt) const;
+
+    /// Collect aggregates from an expression.
+    /// @param expr The expression to scan.
+    /// @param aggregates Output vector for found aggregates.
+    void collectAggregatesFromExpr(const parser::Expr* expr,
+                                   std::vector<const parser::AggregateExpr*>& aggregates) const;
+
+    /// Process aggregate query and populate result_rows_.
+    /// @param stmt The SELECT statement.
+    /// @param schema The source table schema.
+    void processAggregateQuery(const parser::SelectStmt& stmt, const Schema& schema);
+
+    /// Evaluate an expression, replacing aggregates with finalized values.
+    /// @param expr The expression to evaluate.
+    /// @param group_key The group key values.
+    /// @param agg_values The finalized aggregate values.
+    /// @param aggregates List of aggregate expressions in order.
+    /// @param schema The source schema.
+    /// @return The evaluated value.
+    Value evaluateExprWithAggregates(const parser::Expr* expr,
+                                     const GroupKey& group_key,
+                                     const std::vector<Value>& agg_values,
+                                     const std::vector<const parser::AggregateExpr*>& aggregates,
+                                     const parser::SelectStmt& stmt,
+                                     const Schema& schema) const;
+
+    // =========================================================================
+    // Aggregate Validation Methods
+    // =========================================================================
+
+    /// Validate aggregate query constraints.
+    /// @param stmt The SELECT statement.
+    /// @param schema The source schema.
+    /// @return Error result if validation fails, empty result if OK.
+    ExecutionResult validateAggregateQuery(const parser::SelectStmt& stmt,
+                                           const Schema& schema) const;
+
+    /// Check if a column is in the GROUP BY clause.
+    /// @param col_name The column name to check.
+    /// @param stmt The SELECT statement.
+    /// @return true if the column is in GROUP BY.
+    bool isColumnInGroupBy(const std::string& col_name,
+                           const parser::SelectStmt& stmt) const;
+
+    /// Validate that non-aggregate expressions only use GROUP BY columns.
+    /// @param expr The expression to validate.
+    /// @param stmt The SELECT statement.
+    /// @param error_msg Output error message if validation fails.
+    /// @return true if valid, false otherwise.
+    bool validateExprGroupByConstraint(const parser::Expr* expr,
+                                       const parser::SelectStmt& stmt,
+                                       std::string& error_msg) const;
+
+    /// Validate aggregate function type constraints (e.g., SUM/AVG require numeric).
+    /// @param agg The aggregate expression.
+    /// @param schema The source schema.
+    /// @param error_msg Output error message if validation fails.
+    /// @return true if valid, false otherwise.
+    bool validateAggregateTypeConstraint(const parser::AggregateExpr* agg,
+                                         const Schema& schema,
+                                         std::string& error_msg) const;
+
+    // =========================================================================
+    // Aggregate Result Schema Methods
+    // =========================================================================
+
+    /// Compute the result schema for an aggregate query.
+    /// @param stmt The SELECT statement.
+    /// @param source_schema The source table schema.
+    /// @param alias_map Output map of column aliases.
+    /// @return The result schema with proper types and names.
+    Schema computeAggregateResultSchema(const parser::SelectStmt& stmt,
+                                        const Schema& source_schema,
+                                        std::unordered_map<std::string, std::string>& alias_map) const;
+
+    /// Infer the result type for an aggregate function.
+    /// @param agg The aggregate expression.
+    /// @param source_schema The source table schema.
+    /// @return The logical type of the aggregate result.
+    LogicalType inferAggregateType(const parser::AggregateExpr* agg,
+                                   const Schema& source_schema) const;
+
+    /// Generate a column name for an aggregate expression.
+    /// @param agg The aggregate expression.
+    /// @return A descriptive column name (e.g., "COUNT(*)", "SUM(amount)").
+    std::string generateAggregateName(const parser::AggregateExpr* agg) const;
 
     // Query state for SELECT iteration
     Table* current_table_ = nullptr;           ///< Current table being queried.

@@ -85,6 +85,10 @@ private:
     Result<std::vector<SelectItem>> parseSelectList();
     Result<std::vector<OrderByItem>> parseOrderByClause();
     Result<std::pair<int64_t, int64_t>> parseLimitOffsetClause();  // returns {limit, offset}
+    Result<std::vector<std::unique_ptr<Expr>>> parseGroupByClause();
+
+    // Aggregate expression parsing
+    Result<std::unique_ptr<Expr>> parseAggregateExpr();
 
     // Error helper with location info
     template<typename T>

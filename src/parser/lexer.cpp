@@ -46,6 +46,12 @@ const char* token_type_name(TokenType type) {
         case TokenType::OFFSET: return "OFFSET";
         case TokenType::DISTINCT: return "DISTINCT";
 
+        case TokenType::COUNT: return "COUNT";
+        case TokenType::SUM: return "SUM";
+        case TokenType::AVG: return "AVG";
+        case TokenType::MIN: return "MIN";
+        case TokenType::MAX: return "MAX";
+
         case TokenType::EXISTS: return "EXISTS";
         case TokenType::IN: return "IN";
         case TokenType::BETWEEN: return "BETWEEN";
