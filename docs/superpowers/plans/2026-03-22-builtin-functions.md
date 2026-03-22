@@ -172,6 +172,12 @@ public:
 private:
     FunctionRegistry();
     
+    /// Register all built-in string functions
+    void registerStringFunctions();
+    
+    /// Register all built-in math functions
+    void registerMathFunctions();
+    
     /// Convert name to uppercase for case-insensitive lookup
     static std::string normalizeName(const std::string& name);
     
