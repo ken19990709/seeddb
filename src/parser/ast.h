@@ -28,6 +28,12 @@ enum class NodeType {
     EXPR_COLUMN_REF,
     EXPR_IS_NULL,
     EXPR_AGGREGATE,
+    EXPR_CASE,
+    EXPR_IN,
+    EXPR_BETWEEN,
+    EXPR_LIKE,
+    EXPR_COALESCE,
+    EXPR_NULLIF,
     // Definitions
     COLUMN_DEF,
     TABLE_REF
@@ -288,6 +294,155 @@ private:
     std::unique_ptr<Expr> arg_;
     bool distinct_;
     bool is_star_;
+};
+
+/// CASE WHEN clause (condition and result)
+struct CaseWhenClause {
+    std::unique_ptr<Expr> when_expr;  // Condition to evaluate
+    std::unique_ptr<Expr> then_expr;  // Result if condition is true
+
+    CaseWhenClause();
+    CaseWhenClause(std::unique_ptr<Expr> when_e, std::unique_ptr<Expr> then_e);
+    ~CaseWhenClause();
+
+    // Move operations
+    CaseWhenClause(CaseWhenClause&&) = default;
+    CaseWhenClause& operator=(CaseWhenClause&&) = default;
+    CaseWhenClause(const CaseWhenClause&) = delete;
+    CaseWhenClause& operator=(const CaseWhenClause&) = delete;
+};
+
+/// CASE WHEN expression
+class CaseExpr : public Expr {
+public:
+    CaseExpr() = default;
+
+    NodeType type() const override { return NodeType::EXPR_CASE; }
+    std::string toString() const override;
+
+    const auto& whenClauses() const { return when_clauses_; }
+    const Expr* elseExpr() const { return else_expr_.get(); }
+    bool hasElse() const { return else_expr_ != nullptr; }
+
+    void addWhenClause(CaseWhenClause clause) {
+        when_clauses_.push_back(std::move(clause));
+    }
+    void setElse(std::unique_ptr<Expr> else_expr) {
+        else_expr_ = std::move(else_expr);
+    }
+
+private:
+    std::vector<CaseWhenClause> when_clauses_;
+    std::unique_ptr<Expr> else_expr_;
+};
+
+/// IN expression (expr IN (val1, val2, ...))
+class InExpr : public Expr {
+public:
+    InExpr(std::unique_ptr<Expr> expr, bool negated = false)
+        : expr_(std::move(expr)), negated_(negated) {}
+
+    NodeType type() const override { return NodeType::EXPR_IN; }
+    std::string toString() const override;
+
+    const Expr* expr() const { return expr_.get(); }
+    const auto& values() const { return values_; }
+    bool isNegated() const { return negated_; }
+
+    void addValue(std::unique_ptr<Expr> val) {
+        values_.push_back(std::move(val));
+    }
+
+private:
+    std::unique_ptr<Expr> expr_;
+    std::vector<std::unique_ptr<Expr>> values_;
+    bool negated_;
+};
+
+/// BETWEEN expression (expr BETWEEN low AND high)
+class BetweenExpr : public Expr {
+public:
+    BetweenExpr(std::unique_ptr<Expr> expr,
+                std::unique_ptr<Expr> low,
+                std::unique_ptr<Expr> high,
+                bool negated = false)
+        : expr_(std::move(expr)),
+          low_(std::move(low)),
+          high_(std::move(high)),
+          negated_(negated) {}
+
+    NodeType type() const override { return NodeType::EXPR_BETWEEN; }
+    std::string toString() const override;
+
+    const Expr* expr() const { return expr_.get(); }
+    const Expr* low() const { return low_.get(); }
+    const Expr* high() const { return high_.get(); }
+    bool isNegated() const { return negated_; }
+
+private:
+    std::unique_ptr<Expr> expr_;
+    std::unique_ptr<Expr> low_;
+    std::unique_ptr<Expr> high_;
+    bool negated_;
+};
+
+/// LIKE expression (str LIKE pattern)
+class LikeExpr : public Expr {
+public:
+    LikeExpr(std::unique_ptr<Expr> str,
+             std::unique_ptr<Expr> pattern,
+             bool negated = false)
+        : str_(std::move(str)),
+          pattern_(std::move(pattern)),
+          negated_(negated) {}
+
+    NodeType type() const override { return NodeType::EXPR_LIKE; }
+    std::string toString() const override;
+
+    const Expr* str() const { return str_.get(); }
+    const Expr* pattern() const { return pattern_.get(); }
+    bool isNegated() const { return negated_; }
+
+private:
+    std::unique_ptr<Expr> str_;
+    std::unique_ptr<Expr> pattern_;
+    bool negated_;
+};
+
+/// COALESCE function (return first non-NULL argument)
+class CoalesceExpr : public Expr {
+public:
+    CoalesceExpr() = default;
+
+    NodeType type() const override { return NodeType::EXPR_COALESCE; }
+    std::string toString() const override;
+
+    const auto& args() const { return args_; }
+    size_t argCount() const { return args_.size(); }
+
+    void addArg(std::unique_ptr<Expr> arg) {
+        args_.push_back(std::move(arg));
+    }
+
+private:
+    std::vector<std::unique_ptr<Expr>> args_;
+};
+
+/// NULLIF function (return NULL if expr1 == expr2, else expr1)
+class NullifExpr : public Expr {
+public:
+    NullifExpr(std::unique_ptr<Expr> expr1, std::unique_ptr<Expr> expr2)
+        : expr1_(std::move(expr1)), expr2_(std::move(expr2)) {}
+
+    NodeType type() const override { return NodeType::EXPR_NULLIF; }
+    std::string toString() const override;
+
+    const Expr* expr1() const { return expr1_.get(); }
+    const Expr* expr2() const { return expr2_.get(); }
+
+private:
+    std::unique_ptr<Expr> expr1_;
+    std::unique_ptr<Expr> expr2_;
 };
 
 /// Column definition

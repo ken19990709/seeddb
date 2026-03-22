@@ -30,6 +30,12 @@ enum class TokenType {
     // ===== Subquery support =====
     EXISTS, IN, BETWEEN, LIKE, IS, AS, IF,
 
+    // ===== CASE expression =====
+    CASE, WHEN, THEN, ELSE, END,
+
+    // ===== NULL functions =====
+    COALESCE, NULLIF,
+
     // ===== Data types =====
     INTEGER, BIGINT, SMALLINT, FLOAT, DOUBLE, VARCHAR, CHAR, TEXT, BOOLEAN,
 

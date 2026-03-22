@@ -650,9 +650,55 @@ Result<std::unique_ptr<Expr>> Parser::parseComparisonExpr() {
         auto right = parseAdditiveExpr();
         if (!right.is_ok()) return right;
 
-        return Result<std::unique_ptr<Expr>>::ok(
+        left = Result<std::unique_ptr<Expr>>::ok(
             std::make_unique<BinaryExpr>(op, std::move(left.value()), std::move(right.value()))
         );
+    }
+
+    // Check for IS [NOT] NULL (postfix operator)
+    if (check(TokenType::IS)) {
+        consume();
+        bool negated = false;
+        if (match(TokenType::NOT)) {
+            negated = true;
+        }
+        if (!match(TokenType::NULL_LIT)) {
+            return syntax_error<std::unique_ptr<Expr>>("Expected NULL after IS");
+        }
+        return Result<std::unique_ptr<Expr>>::ok(
+            std::make_unique<IsNullExpr>(std::move(left.value()), negated)
+        );
+    }
+
+    // Check for [NOT] BETWEEN/LIKE/IN (postfix operators)
+    if (check(TokenType::NOT)) {
+        consume();  // consume NOT
+
+        if (check(TokenType::BETWEEN)) {
+            return parseBetweenExpr(std::move(left.value()), true);
+        } else if (check(TokenType::LIKE)) {
+            return parseLikeExpr(std::move(left.value()), true);
+        } else if (check(TokenType::IN)) {
+            return parseInExpr(std::move(left.value()), true);
+        } else {
+            // Not NOT BETWEEN/LIKE/IN, put back NOT by returning error
+            return syntax_error<std::unique_ptr<Expr>>("Expected BETWEEN, LIKE, or IN after NOT");
+        }
+    }
+
+    // Check for BETWEEN (postfix operator)
+    if (check(TokenType::BETWEEN)) {
+        return parseBetweenExpr(std::move(left.value()));
+    }
+
+    // Check for LIKE (postfix operator)
+    if (check(TokenType::LIKE)) {
+        return parseLikeExpr(std::move(left.value()));
+    }
+
+    // Check for IN (postfix operator)
+    if (check(TokenType::IN)) {
+        return parseInExpr(std::move(left.value()));
     }
 
     return left;
@@ -715,6 +761,21 @@ Result<std::unique_ptr<Expr>> Parser::parseUnaryExpr() {
 }
 
 Result<std::unique_ptr<Expr>> Parser::parsePrimaryExpr() {
+    // Check for CASE expression
+    if (check(TokenType::CASE)) {
+        return parseCaseExpr();
+    }
+
+    // Check for COALESCE function
+    if (check(TokenType::COALESCE)) {
+        return parseCoalesceExpr();
+    }
+
+    // Check for NULLIF function
+    if (check(TokenType::NULLIF)) {
+        return parseNullifExpr();
+    }
+
     // Check for aggregate functions (COUNT, SUM, AVG, MIN, MAX)
     if (check(TokenType::COUNT) || check(TokenType::SUM) || check(TokenType::AVG) ||
         check(TokenType::MIN) || check(TokenType::MAX)) {
@@ -871,6 +932,187 @@ Result<std::vector<std::unique_ptr<Expr>>> Parser::parseGroupByClause() {
     } while (match(TokenType::COMMA));
 
     return Result<std::vector<std::unique_ptr<Expr>>>::ok(std::move(group_by));
+}
+
+// ===== New Expression Parsing (Phase 2.3) =====
+
+// Parse CASE WHEN expression
+Result<std::unique_ptr<Expr>> Parser::parseCaseExpr() {
+    // Expect CASE
+    if (!match(TokenType::CASE)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected CASE");
+    }
+
+    auto case_expr = std::make_unique<CaseExpr>();
+
+    // Parse WHEN clauses
+    while (match(TokenType::WHEN)) {
+        auto when_cond = parseExpression();
+        if (!when_cond.is_ok()) {
+            return when_cond;
+        }
+
+        if (!match(TokenType::THEN)) {
+            return syntax_error<std::unique_ptr<Expr>>("Expected THEN after WHEN condition");
+        }
+
+        auto then_expr = parseExpression();
+        if (!then_expr.is_ok()) {
+            return then_expr;
+        }
+
+        case_expr->addWhenClause(CaseWhenClause(
+            std::move(when_cond.value()),
+            std::move(then_expr.value())
+        ));
+    }
+
+    // Optional ELSE clause
+    if (match(TokenType::ELSE)) {
+        auto else_expr = parseExpression();
+        if (!else_expr.is_ok()) {
+            return else_expr;
+        }
+        case_expr->setElse(std::move(else_expr.value()));
+    }
+
+    // Expect END
+    if (!match(TokenType::END)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected END after CASE expression");
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(std::move(case_expr));
+}
+
+// Parse IN expression (left IN (values...))
+Result<std::unique_ptr<Expr>> Parser::parseInExpr(std::unique_ptr<Expr> left, bool negated) {
+    // Expect IN (already confirmed by caller)
+    consume();  // consume IN
+
+    // Expect (
+    if (!match(TokenType::LPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected '(' after IN");
+    }
+
+    auto in_expr = std::make_unique<InExpr>(std::move(left), negated);
+
+    // Parse value list
+    do {
+        auto val = parseExpression();
+        if (!val.is_ok()) {
+            return val;
+        }
+        in_expr->addValue(std::move(val.value()));
+    } while (match(TokenType::COMMA));
+
+    // Expect )
+    if (!match(TokenType::RPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected ')' after IN value list");
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(std::move(in_expr));
+}
+
+// Parse BETWEEN expression (left BETWEEN low AND high)
+Result<std::unique_ptr<Expr>> Parser::parseBetweenExpr(std::unique_ptr<Expr> left, bool negated) {
+    // Expect BETWEEN (already confirmed by caller)
+    consume();  // consume BETWEEN
+
+    auto low = parseAdditiveExpr();  // Parse lower bound (same precedence as additive)
+    if (!low.is_ok()) {
+        return low;
+    }
+
+    if (!match(TokenType::AND)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected AND in BETWEEN expression");
+    }
+
+    auto high = parseAdditiveExpr();  // Parse upper bound
+    if (!high.is_ok()) {
+        return high;
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(
+        std::make_unique<BetweenExpr>(std::move(left), std::move(low.value()), std::move(high.value()), negated)
+    );
+}
+
+// Parse LIKE expression (str LIKE pattern)
+Result<std::unique_ptr<Expr>> Parser::parseLikeExpr(std::unique_ptr<Expr> left, bool negated) {
+    // Expect LIKE (already confirmed by caller)
+    consume();  // consume LIKE
+
+    auto pattern = parsePrimaryExpr();  // Pattern is a primary expression (usually string literal)
+    if (!pattern.is_ok()) {
+        return pattern;
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(
+        std::make_unique<LikeExpr>(std::move(left), std::move(pattern.value()), negated)
+    );
+}
+
+// Parse COALESCE function
+Result<std::unique_ptr<Expr>> Parser::parseCoalesceExpr() {
+    // Expect COALESCE (already confirmed by caller)
+    consume();  // consume COALESCE
+
+    // Expect (
+    if (!match(TokenType::LPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected '(' after COALESCE");
+    }
+
+    auto coalesce_expr = std::make_unique<CoalesceExpr>();
+
+    // Parse arguments
+    do {
+        auto arg = parseExpression();
+        if (!arg.is_ok()) {
+            return arg;
+        }
+        coalesce_expr->addArg(std::move(arg.value()));
+    } while (match(TokenType::COMMA));
+
+    // Expect )
+    if (!match(TokenType::RPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected ')' after COALESCE arguments");
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(std::move(coalesce_expr));
+}
+
+// Parse NULLIF function
+Result<std::unique_ptr<Expr>> Parser::parseNullifExpr() {
+    // Expect NULLIF (already confirmed by caller)
+    consume();  // consume NULLIF
+
+    // Expect (
+    if (!match(TokenType::LPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected '(' after NULLIF");
+    }
+
+    auto expr1 = parseExpression();
+    if (!expr1.is_ok()) {
+        return expr1;
+    }
+
+    if (!match(TokenType::COMMA)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected ',' between NULLIF arguments");
+    }
+
+    auto expr2 = parseExpression();
+    if (!expr2.is_ok()) {
+        return expr2;
+    }
+
+    // Expect )
+    if (!match(TokenType::RPAREN)) {
+        return syntax_error<std::unique_ptr<Expr>>("Expected ')' after NULLIF arguments");
+    }
+
+    return Result<std::unique_ptr<Expr>>::ok(
+        std::make_unique<NullifExpr>(std::move(expr1.value()), std::move(expr2.value()))
+    );
 }
 
 // Placeholder implementation for parseAll()

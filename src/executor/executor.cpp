@@ -760,6 +760,103 @@ Value Executor::evaluateExpr(const parser::Expr* expr, const Row& row, const Sch
             return Value::boolean(is_null->isNegated() ? !is_null_result : is_null_result);
         }
 
+        case parser::NodeType::EXPR_CASE: {
+            const auto* case_expr = static_cast<const parser::CaseExpr*>(expr);
+            // Evaluate each WHEN clause in order
+            for (const auto& when_clause : case_expr->whenClauses()) {
+                Value cond = evaluateExpr(when_clause.when_expr.get(), row, schema);
+                // NULL condition is treated as false
+                if (!cond.isNull() && cond.asBool()) {
+                    return evaluateExpr(when_clause.then_expr.get(), row, schema);
+                }
+            }
+            // No WHEN clause matched - return ELSE or NULL
+            if (case_expr->hasElse()) {
+                return evaluateExpr(case_expr->elseExpr(), row, schema);
+            }
+            return Value::null();
+        }
+
+        case parser::NodeType::EXPR_IN: {
+            const auto* in_expr = static_cast<const parser::InExpr*>(expr);
+            Value left = evaluateExpr(in_expr->expr(), row, schema);
+
+            // NULL left operand with non-empty list returns NULL (not false)
+            if (left.isNull()) {
+                return Value::null();
+            }
+
+            // Check membership in value list
+            for (const auto& val_expr : in_expr->values()) {
+                Value val = evaluateExpr(val_expr.get(), row, schema);
+                if (val.isNull()) {
+                    // NULL in list means result could be NULL (but for simplicity, we continue)
+                    continue;
+                }
+                if (left.equals(val)) {
+                    return Value::boolean(!in_expr->isNegated());
+                }
+            }
+            // No match found
+            return Value::boolean(in_expr->isNegated());
+        }
+
+        case parser::NodeType::EXPR_BETWEEN: {
+            const auto* between_expr = static_cast<const parser::BetweenExpr*>(expr);
+            Value val = evaluateExpr(between_expr->expr(), row, schema);
+            Value low = evaluateExpr(between_expr->low(), row, schema);
+            Value high = evaluateExpr(between_expr->high(), row, schema);
+
+            // If any operand is NULL, result is NULL
+            if (val.isNull() || low.isNull() || high.isNull()) {
+                return Value::null();
+            }
+
+            // Check if val is in range [low, high]
+            bool in_range = (!val.lessThan(low) && !high.lessThan(val));
+            return Value::boolean(between_expr->isNegated() ? !in_range : in_range);
+        }
+
+        case parser::NodeType::EXPR_LIKE: {
+            const auto* like_expr = static_cast<const parser::LikeExpr*>(expr);
+            Value str = evaluateExpr(like_expr->str(), row, schema);
+            Value pattern = evaluateExpr(like_expr->pattern(), row, schema);
+
+            // If any operand is NULL, result is NULL
+            if (str.isNull() || pattern.isNull()) {
+                return Value::null();
+            }
+
+            // Perform pattern matching
+            bool matches = matchLikePattern(str.asString(), pattern.asString());
+            return Value::boolean(like_expr->isNegated() ? !matches : matches);
+        }
+
+        case parser::NodeType::EXPR_COALESCE: {
+            const auto* coalesce_expr = static_cast<const parser::CoalesceExpr*>(expr);
+            // Return first non-NULL argument
+            for (const auto& arg : coalesce_expr->args()) {
+                Value val = evaluateExpr(arg.get(), row, schema);
+                if (!val.isNull()) {
+                    return val;
+                }
+            }
+            // All arguments were NULL
+            return Value::null();
+        }
+
+        case parser::NodeType::EXPR_NULLIF: {
+            const auto* nullif_expr = static_cast<const parser::NullifExpr*>(expr);
+            Value expr1 = evaluateExpr(nullif_expr->expr1(), row, schema);
+            Value expr2 = evaluateExpr(nullif_expr->expr2(), row, schema);
+
+            // If equal, return NULL; otherwise return expr1
+            if (!expr1.isNull() && !expr2.isNull() && expr1.equals(expr2)) {
+                return Value::null();
+            }
+            return expr1;
+        }
+
         default:
             return Value::null();
     }
@@ -1561,6 +1658,50 @@ std::string Executor::generateAggregateName(const parser::AggregateExpr* agg) co
 
     name += ")";
     return name;
+}
+
+// =============================================================================
+// LIKE Pattern Matching
+// =============================================================================
+
+bool Executor::matchLikePattern(const std::string& str, const std::string& pattern) const {
+    // Use dynamic programming for pattern matching
+    // dp[i][j] = true if str[0..i-1] matches pattern[0..j-1]
+    size_t m = str.size();
+    size_t n = pattern.size();
+
+    // dp[i][j] represents whether str[0..i) matches pattern[0..j)
+    std::vector<std::vector<bool>> dp(m + 1, std::vector<bool>(n + 1, false));
+
+    // Empty pattern matches empty string
+    dp[0][0] = true;
+
+    // Handle patterns that start with % - they can match empty string
+    for (size_t j = 1; j <= n; ++j) {
+        if (pattern[j - 1] == '%') {
+            dp[0][j] = dp[0][j - 1];
+        }
+    }
+
+    // Fill the DP table
+    for (size_t i = 1; i <= m; ++i) {
+        for (size_t j = 1; j <= n; ++j) {
+            if (pattern[j - 1] == '%') {
+                // % matches zero or more characters
+                // dp[i][j-1]: % matches zero characters
+                // dp[i-1][j]: % matches one or more characters
+                dp[i][j] = dp[i][j - 1] || dp[i - 1][j];
+            } else if (pattern[j - 1] == '_') {
+                // _ matches exactly one character
+                dp[i][j] = dp[i - 1][j - 1];
+            } else {
+                // Regular character match
+                dp[i][j] = dp[i - 1][j - 1] && (str[i - 1] == pattern[j - 1]);
+            }
+        }
+    }
+
+    return dp[m][n];
 }
 
 } // namespace seeddb

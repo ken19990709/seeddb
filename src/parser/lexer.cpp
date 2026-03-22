@@ -60,6 +60,15 @@ const char* token_type_name(TokenType type) {
         case TokenType::AS: return "AS";
         case TokenType::IF: return "IF";
 
+        case TokenType::CASE: return "CASE";
+        case TokenType::WHEN: return "WHEN";
+        case TokenType::THEN: return "THEN";
+        case TokenType::ELSE: return "ELSE";
+        case TokenType::END: return "END";
+
+        case TokenType::COALESCE: return "COALESCE";
+        case TokenType::NULLIF: return "NULLIF";
+
         case TokenType::INTEGER: return "INTEGER";
         case TokenType::BIGINT: return "BIGINT";
         case TokenType::SMALLINT: return "SMALLINT";

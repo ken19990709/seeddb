@@ -789,3 +789,316 @@ TEST_CASE("Parser: Combined aggregate clauses", "[parser]") {
         REQUIRE(select->hasLimit());
     }
 }
+
+// ===== CASE WHEN Expression Tests =====
+
+TEST_CASE("Parser: CASE WHEN expression", "[parser][expression]") {
+    SECTION("CASE WHEN single branch") {
+        std::string sql = "SELECT CASE WHEN a > 0 THEN 1 END FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* case_expr = dynamic_cast<const CaseExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(case_expr != nullptr);
+        REQUIRE(case_expr->whenClauses().size() == 1);
+        REQUIRE_FALSE(case_expr->hasElse());
+    }
+
+    SECTION("CASE WHEN multiple branches") {
+        std::string sql = "SELECT CASE WHEN a = 1 THEN 'one' WHEN a = 2 THEN 'two' WHEN a = 3 THEN 'three' END FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* case_expr = dynamic_cast<const CaseExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(case_expr != nullptr);
+        REQUIRE(case_expr->whenClauses().size() == 3);
+        REQUIRE_FALSE(case_expr->hasElse());
+    }
+
+    SECTION("CASE WHEN with ELSE clause") {
+        std::string sql = "SELECT CASE WHEN a > 0 THEN 'positive' ELSE 'zero or negative' END FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* case_expr = dynamic_cast<const CaseExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(case_expr != nullptr);
+        REQUIRE(case_expr->whenClauses().size() == 1);
+        REQUIRE(case_expr->hasElse());
+    }
+
+    SECTION("CASE WHEN in WHERE clause") {
+        std::string sql = "SELECT * FROM t WHERE CASE WHEN a > 0 THEN true ELSE false END";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+    }
+}
+
+// ===== IN Expression Tests =====
+
+TEST_CASE("Parser: IN expression", "[parser][expression]") {
+    SECTION("IN with literals") {
+        std::string sql = "SELECT * FROM t WHERE a IN (1, 2, 3)";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+
+        auto* in_expr = dynamic_cast<const InExpr*>(select->whereExpr());
+        REQUIRE(in_expr != nullptr);
+        REQUIRE_FALSE(in_expr->isNegated());
+        REQUIRE(in_expr->values().size() == 3);
+    }
+
+    SECTION("IN with strings") {
+        std::string sql = "SELECT * FROM t WHERE name IN ('Alice', 'Bob', 'Charlie')";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* in_expr = dynamic_cast<const InExpr*>(select->whereExpr());
+        REQUIRE(in_expr != nullptr);
+        REQUIRE(in_expr->values().size() == 3);
+    }
+
+    SECTION("NOT IN") {
+        std::string sql = "SELECT * FROM t WHERE a NOT IN (1, 2, 3)";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+
+        auto* in_expr = dynamic_cast<const InExpr*>(select->whereExpr());
+        REQUIRE(in_expr != nullptr);
+        REQUIRE(in_expr->isNegated());
+    }
+}
+
+// ===== BETWEEN Expression Tests =====
+
+TEST_CASE("Parser: BETWEEN expression", "[parser][expression]") {
+    SECTION("BETWEEN with numbers") {
+        std::string sql = "SELECT * FROM t WHERE a BETWEEN 1 AND 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+
+        auto* between_expr = dynamic_cast<const BetweenExpr*>(select->whereExpr());
+        REQUIRE(between_expr != nullptr);
+        REQUIRE_FALSE(between_expr->isNegated());
+    }
+
+    SECTION("NOT BETWEEN") {
+        std::string sql = "SELECT * FROM t WHERE a NOT BETWEEN 1 AND 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+
+        auto* between_expr = dynamic_cast<const BetweenExpr*>(select->whereExpr());
+        REQUIRE(between_expr != nullptr);
+        REQUIRE(between_expr->isNegated());
+    }
+}
+
+// ===== LIKE Expression Tests =====
+
+TEST_CASE("Parser: LIKE expression", "[parser][expression]") {
+    SECTION("LIKE with pattern") {
+        std::string sql = "SELECT * FROM t WHERE name LIKE 'A%'";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+
+        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereExpr());
+        REQUIRE(like_expr != nullptr);
+        REQUIRE_FALSE(like_expr->isNegated());
+    }
+
+    SECTION("LIKE with underscore wildcard") {
+        std::string sql = "SELECT * FROM t WHERE name LIKE '_ob'";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereExpr());
+        REQUIRE(like_expr != nullptr);
+    }
+
+    SECTION("NOT LIKE") {
+        std::string sql = "SELECT * FROM t WHERE name NOT LIKE '%test%'";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+
+        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereExpr());
+        REQUIRE(like_expr != nullptr);
+        REQUIRE(like_expr->isNegated());
+    }
+}
+
+// ===== COALESCE Expression Tests =====
+
+TEST_CASE("Parser: COALESCE function", "[parser][expression]") {
+    SECTION("COALESCE with two args") {
+        std::string sql = "SELECT COALESCE(a, 0) FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* coalesce_expr = dynamic_cast<const CoalesceExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(coalesce_expr != nullptr);
+        REQUIRE(coalesce_expr->args().size() == 2);
+    }
+
+    SECTION("COALESCE with multiple args") {
+        std::string sql = "SELECT COALESCE(a, b, c, 'default') FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* coalesce_expr = dynamic_cast<const CoalesceExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(coalesce_expr != nullptr);
+        REQUIRE(coalesce_expr->args().size() == 4);
+    }
+
+    SECTION("COALESCE in WHERE clause") {
+        std::string sql = "SELECT * FROM t WHERE COALESCE(a, 0) > 10";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        REQUIRE(select->hasWhere());
+    }
+}
+
+// ===== NULLIF Expression Tests =====
+
+TEST_CASE("Parser: NULLIF function", "[parser][expression]") {
+    SECTION("NULLIF with two args") {
+        std::string sql = "SELECT NULLIF(a, 0) FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* nullif_expr = dynamic_cast<const NullifExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(nullif_expr != nullptr);
+        REQUIRE(nullif_expr->expr1() != nullptr);
+        REQUIRE(nullif_expr->expr2() != nullptr);
+    }
+
+    SECTION("NULLIF with column references") {
+        std::string sql = "SELECT NULLIF(a, b) FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+
+        auto* select = static_cast<SelectStmt*>(result.value().get());
+        auto* nullif_expr = dynamic_cast<const NullifExpr*>(select->selectItems()[0].expr.get());
+        REQUIRE(nullif_expr != nullptr);
+    }
+}
+
+// ===== Complex Expression Combination Tests =====
+
+TEST_CASE("Parser: Complex expressions combined", "[parser][expression]") {
+    SECTION("CASE WHEN with IN") {
+        std::string sql = "SELECT CASE WHEN a IN (1, 2, 3) THEN 'small' ELSE 'large' END FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("COALESCE with BETWEEN") {
+        std::string sql = "SELECT * FROM t WHERE COALESCE(a, 0) BETWEEN 1 AND 100";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("Multiple expression types in WHERE") {
+        std::string sql = "SELECT * FROM t WHERE a IN (1, 2, 3) AND b BETWEEN 0 AND 10 AND c LIKE '%test%'";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+
+    SECTION("CASE WHEN with COALESCE and NULLIF") {
+        std::string sql = "SELECT CASE WHEN NULLIF(a, 0) IS NULL THEN 'zero' ELSE COALESCE(b, 'unknown') END FROM t";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+    }
+}

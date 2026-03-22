@@ -90,6 +90,14 @@ private:
     // Aggregate expression parsing
     Result<std::unique_ptr<Expr>> parseAggregateExpr();
 
+    // New expression parsing (Phase 2.3)
+    Result<std::unique_ptr<Expr>> parseCaseExpr();
+    Result<std::unique_ptr<Expr>> parseInExpr(std::unique_ptr<Expr> left, bool negated = false);
+    Result<std::unique_ptr<Expr>> parseBetweenExpr(std::unique_ptr<Expr> left, bool negated = false);
+    Result<std::unique_ptr<Expr>> parseLikeExpr(std::unique_ptr<Expr> left, bool negated = false);
+    Result<std::unique_ptr<Expr>> parseCoalesceExpr();
+    Result<std::unique_ptr<Expr>> parseNullifExpr();
+
     // Error helper with location info
     template<typename T>
     Result<T> syntax_error(const std::string& message) const {

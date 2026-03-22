@@ -67,6 +67,17 @@ inline const std::unordered_map<std::string_view, TokenType> keywords = {
     {"AS", TokenType::AS},
     {"IF", TokenType::IF},
 
+    // CASE expression
+    {"CASE", TokenType::CASE},
+    {"WHEN", TokenType::WHEN},
+    {"THEN", TokenType::THEN},
+    {"ELSE", TokenType::ELSE},
+    {"END", TokenType::END},
+
+    // NULL functions
+    {"COALESCE", TokenType::COALESCE},
+    {"NULLIF", TokenType::NULLIF},
+
     // Data types
     {"INTEGER", TokenType::INTEGER},
     {"INT", TokenType::INTEGER},  // Alias

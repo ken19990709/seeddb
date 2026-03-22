@@ -1462,3 +1462,534 @@ TEST_CASE("Executor: Aggregate with WHERE clause", "[executor][aggregate]") {
 
     executor.resetQuery();
 }
+
+// =============================================================================
+// CASE WHEN Expression Tests
+// =============================================================================
+
+TEST_CASE("Executor: CASE WHEN simple", "[executor][expression][case]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table with values
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("nums");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "val", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("nums");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(10)));
+    executor.execute(*insert);
+
+    // SELECT CASE WHEN val > 5 THEN 1 ELSE 0 END FROM nums
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("nums"));
+
+    auto case_expr = std::make_unique<parser::CaseExpr>();
+    case_expr->addWhenClause(parser::CaseWhenClause(
+        std::make_unique<parser::BinaryExpr>(">",
+            std::make_unique<parser::ColumnRef>("val"),
+            std::make_unique<parser::LiteralExpr>(int64_t(5))),
+        std::make_unique<parser::LiteralExpr>(int64_t(1))
+    ));
+    case_expr->setElse(std::make_unique<parser::LiteralExpr>(int64_t(0)));
+    select->addColumn(std::move(case_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).asInt32() == 1);  // val=10 > 5, so result is 1
+}
+
+TEST_CASE("Executor: CASE WHEN multiple branches", "[executor][expression][case]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // Create table
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("grades");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "score", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("grades");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(85)));
+    executor.execute(*insert);
+
+    // SELECT CASE WHEN score >= 90 THEN 'A' WHEN score >= 80 THEN 'B' ELSE 'C' END
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("grades"));
+
+    auto case_expr = std::make_unique<parser::CaseExpr>();
+    case_expr->addWhenClause(parser::CaseWhenClause(
+        std::make_unique<parser::BinaryExpr>(">=",
+            std::make_unique<parser::ColumnRef>("score"),
+            std::make_unique<parser::LiteralExpr>(int64_t(90))),
+        std::make_unique<parser::LiteralExpr>(std::string("A"))
+    ));
+    case_expr->addWhenClause(parser::CaseWhenClause(
+        std::make_unique<parser::BinaryExpr>(">=",
+            std::make_unique<parser::ColumnRef>("score"),
+            std::make_unique<parser::LiteralExpr>(int64_t(80))),
+        std::make_unique<parser::LiteralExpr>(std::string("B"))
+    ));
+    case_expr->setElse(std::make_unique<parser::LiteralExpr>(std::string("C")));
+    select->addColumn(std::move(case_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).asString() == "B");  // score=85, between 80-89
+}
+
+// =============================================================================
+// IN Expression Tests
+// =============================================================================
+
+TEST_CASE("Executor: IN operator matches", "[executor][expression][in]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("items");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("items");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    executor.execute(*insert);
+
+    // SELECT * FROM items WHERE id IN (1, 2, 3)
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("items"));
+
+    auto in_expr = std::make_unique<parser::InExpr>(
+        std::make_unique<parser::ColumnRef>("id"), false);
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(3)));
+    select->setWhere(std::move(in_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // id=2 is in the list
+}
+
+TEST_CASE("Executor: IN operator no match", "[executor][expression][in]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("items");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("items");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(5)));
+    executor.execute(*insert);
+
+    // SELECT * FROM items WHERE id IN (1, 2, 3)
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("items"));
+
+    auto in_expr = std::make_unique<parser::InExpr>(
+        std::make_unique<parser::ColumnRef>("id"), false);
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(3)));
+    select->setWhere(std::move(in_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE_FALSE(executor.hasNext());  // id=5 is not in the list
+}
+
+TEST_CASE("Executor: NOT IN operator", "[executor][expression][in]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("items");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "id", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("items");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(5)));
+    executor.execute(*insert);
+
+    // SELECT * FROM items WHERE id NOT IN (1, 2, 3)
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("items"));
+
+    auto in_expr = std::make_unique<parser::InExpr>(
+        std::make_unique<parser::ColumnRef>("id"), true);  // negated
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(2)));
+    in_expr->addValue(std::make_unique<parser::LiteralExpr>(int64_t(3)));
+    select->setWhere(std::move(in_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // id=5 is NOT in the list
+}
+
+// =============================================================================
+// BETWEEN Expression Tests
+// =============================================================================
+
+TEST_CASE("Executor: BETWEEN operator in range", "[executor][expression][between]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("nums");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "val", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("nums");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(50)));
+    executor.execute(*insert);
+
+    // SELECT * FROM nums WHERE val BETWEEN 10 AND 100
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("nums"));
+
+    auto between_expr = std::make_unique<parser::BetweenExpr>(
+        std::make_unique<parser::ColumnRef>("val"),
+        std::make_unique<parser::LiteralExpr>(int64_t(10)),
+        std::make_unique<parser::LiteralExpr>(int64_t(100)),
+        false);
+    select->setWhere(std::move(between_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // 50 is between 10 and 100
+}
+
+TEST_CASE("Executor: BETWEEN operator out of range", "[executor][expression][between]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("nums");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "val", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("nums");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(5)));
+    executor.execute(*insert);
+
+    // SELECT * FROM nums WHERE val BETWEEN 10 AND 100
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("nums"));
+
+    auto between_expr = std::make_unique<parser::BetweenExpr>(
+        std::make_unique<parser::ColumnRef>("val"),
+        std::make_unique<parser::LiteralExpr>(int64_t(10)),
+        std::make_unique<parser::LiteralExpr>(int64_t(100)),
+        false);
+    select->setWhere(std::move(between_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE_FALSE(executor.hasNext());  // 5 is not between 10 and 100
+}
+
+TEST_CASE("Executor: NOT BETWEEN operator", "[executor][expression][between]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("nums");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "val", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("nums");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(5)));
+    executor.execute(*insert);
+
+    // SELECT * FROM nums WHERE val NOT BETWEEN 10 AND 100
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("nums"));
+
+    auto between_expr = std::make_unique<parser::BetweenExpr>(
+        std::make_unique<parser::ColumnRef>("val"),
+        std::make_unique<parser::LiteralExpr>(int64_t(10)),
+        std::make_unique<parser::LiteralExpr>(int64_t(100)),
+        true);  // negated
+    select->setWhere(std::move(between_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // 5 is NOT between 10 and 100
+}
+
+// =============================================================================
+// LIKE Expression Tests
+// =============================================================================
+
+TEST_CASE("Executor: LIKE operator match", "[executor][expression][like]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("users");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("users");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(std::string("Alice")));
+    executor.execute(*insert);
+
+    // SELECT * FROM users WHERE name LIKE 'A%'
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("users"));
+
+    auto like_expr = std::make_unique<parser::LikeExpr>(
+        std::make_unique<parser::ColumnRef>("name"),
+        std::make_unique<parser::LiteralExpr>(std::string("A%")),
+        false);
+    select->setWhere(std::move(like_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // Alice matches A%
+}
+
+TEST_CASE("Executor: LIKE operator underscore", "[executor][expression][like]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("users");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("users");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(std::string("Bob")));
+    executor.execute(*insert);
+
+    // SELECT * FROM users WHERE name LIKE '_ob'
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("users"));
+
+    auto like_expr = std::make_unique<parser::LikeExpr>(
+        std::make_unique<parser::ColumnRef>("name"),
+        std::make_unique<parser::LiteralExpr>(std::string("_ob")),
+        false);
+    select->setWhere(std::move(like_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // Bob matches _ob
+}
+
+TEST_CASE("Executor: LIKE operator no match", "[executor][expression][like]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("users");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("users");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(std::string("Bob")));
+    executor.execute(*insert);
+
+    // SELECT * FROM users WHERE name LIKE 'A%'
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("users"));
+
+    auto like_expr = std::make_unique<parser::LikeExpr>(
+        std::make_unique<parser::ColumnRef>("name"),
+        std::make_unique<parser::LiteralExpr>(std::string("A%")),
+        false);
+    select->setWhere(std::move(like_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE_FALSE(executor.hasNext());  // Bob doesn't match A%
+}
+
+TEST_CASE("Executor: NOT LIKE operator", "[executor][expression][like]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("users");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("users");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(std::string("Bob")));
+    executor.execute(*insert);
+
+    // SELECT * FROM users WHERE name NOT LIKE 'A%'
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setSelectAll(true);
+    select->setFromTable(std::make_unique<parser::TableRef>("users"));
+
+    auto like_expr = std::make_unique<parser::LikeExpr>(
+        std::make_unique<parser::ColumnRef>("name"),
+        std::make_unique<parser::LiteralExpr>(std::string("A%")),
+        true);  // negated
+    select->setWhere(std::move(like_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());  // Bob doesn't match A%, so NOT LIKE is true
+}
+
+// =============================================================================
+// COALESCE Expression Tests
+// =============================================================================
+
+TEST_CASE("Executor: COALESCE first non-null", "[executor][expression][coalesce]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("t");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "a", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("t");
+    insert->addValues(std::make_unique<parser::LiteralExpr>());  // NULL
+    executor.execute(*insert);
+
+    // SELECT COALESCE(a, 10) FROM t
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("t"));
+
+    auto coalesce_expr = std::make_unique<parser::CoalesceExpr>();
+    coalesce_expr->addArg(std::make_unique<parser::ColumnRef>("a"));
+    coalesce_expr->addArg(std::make_unique<parser::LiteralExpr>(int64_t(10)));
+    select->addColumn(std::move(coalesce_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).asInt32() == 10);  // a is NULL, return 10
+}
+
+TEST_CASE("Executor: COALESCE skip nulls", "[executor][expression][coalesce]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("t");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "a", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("t");
+    insert->addValues(std::make_unique<parser::LiteralExpr>());  // NULL
+    executor.execute(*insert);
+
+    // SELECT COALESCE(a, NULL, 42) FROM t
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("t"));
+
+    auto coalesce_expr = std::make_unique<parser::CoalesceExpr>();
+    coalesce_expr->addArg(std::make_unique<parser::ColumnRef>("a"));  // NULL
+    coalesce_expr->addArg(std::make_unique<parser::LiteralExpr>());   // NULL
+    coalesce_expr->addArg(std::make_unique<parser::LiteralExpr>(int64_t(42)));
+    select->addColumn(std::move(coalesce_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).asInt32() == 42);  // skip both NULLs, return 42
+}
+
+TEST_CASE("Executor: COALESCE all nulls", "[executor][expression][coalesce]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("t");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "a", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("t");
+    insert->addValues(std::make_unique<parser::LiteralExpr>());  // NULL
+    executor.execute(*insert);
+
+    // SELECT COALESCE(NULL, NULL) FROM t
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("t"));
+
+    auto coalesce_expr = std::make_unique<parser::CoalesceExpr>();
+    coalesce_expr->addArg(std::make_unique<parser::LiteralExpr>());  // NULL
+    coalesce_expr->addArg(std::make_unique<parser::LiteralExpr>());  // NULL
+    select->addColumn(std::move(coalesce_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).isNull());  // All NULLs, return NULL
+}
+
+// =============================================================================
+// NULLIF Expression Tests
+// =============================================================================
+
+TEST_CASE("Executor: NULLIF equal returns null", "[executor][expression][nullif]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    // SELECT NULLIF(10, 10)
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("dummy");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "x", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("dummy");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    executor.execute(*insert);
+
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("dummy"));
+
+    auto nullif_expr = std::make_unique<parser::NullifExpr>(
+        std::make_unique<parser::LiteralExpr>(int64_t(10)),
+        std::make_unique<parser::LiteralExpr>(int64_t(10)));
+    select->addColumn(std::move(nullif_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).isNull());  // 10 = 10, return NULL
+}
+
+TEST_CASE("Executor: NULLIF not equal returns first", "[executor][expression][nullif]") {
+    Catalog catalog;
+    Executor executor(catalog);
+
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("dummy");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "x", parser::DataTypeInfo(parser::DataType::INT)));
+    executor.execute(*create_stmt);
+
+    auto insert = std::make_unique<parser::InsertStmt>("dummy");
+    insert->addValues(std::make_unique<parser::LiteralExpr>(int64_t(1)));
+    executor.execute(*insert);
+
+    auto select = std::make_unique<parser::SelectStmt>();
+    select->setFromTable(std::make_unique<parser::TableRef>("dummy"));
+
+    auto nullif_expr = std::make_unique<parser::NullifExpr>(
+        std::make_unique<parser::LiteralExpr>(int64_t(10)),
+        std::make_unique<parser::LiteralExpr>(int64_t(20)));
+    select->addColumn(std::move(nullif_expr));
+
+    REQUIRE(executor.prepareSelect(*select));
+    REQUIRE(executor.hasNext());
+
+    ExecutionResult result = executor.next();
+    REQUIRE(result.row().get(0).asInt32() == 10);  // 10 != 20, return 10
+}

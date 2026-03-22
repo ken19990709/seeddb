@@ -57,6 +57,67 @@ std::string AggregateExpr::toString() const {
     return result;
 }
 
+// CaseWhenClause implementation
+CaseWhenClause::CaseWhenClause() = default;
+CaseWhenClause::CaseWhenClause(std::unique_ptr<Expr> when_e, std::unique_ptr<Expr> then_e)
+    : when_expr(std::move(when_e)), then_expr(std::move(then_e)) {}
+CaseWhenClause::~CaseWhenClause() = default;
+
+std::string CaseExpr::toString() const {
+    std::string result = "CASE";
+    for (const auto& clause : when_clauses_) {
+        result += " WHEN " + (clause.when_expr ? clause.when_expr->toString() : "null");
+        result += " THEN " + (clause.then_expr ? clause.then_expr->toString() : "null");
+    }
+    if (else_expr_) {
+        result += " ELSE " + else_expr_->toString();
+    }
+    result += " END";
+    return result;
+}
+
+std::string InExpr::toString() const {
+    std::string result = "(" + (expr_ ? expr_->toString() : "null");
+    if (negated_) result += " NOT";
+    result += " IN (";
+    for (size_t i = 0; i < values_.size(); ++i) {
+        if (i > 0) result += ", ";
+        result += values_[i] ? values_[i]->toString() : "null";
+    }
+    result += "))";
+    return result;
+}
+
+std::string BetweenExpr::toString() const {
+    std::string result = "(" + (expr_ ? expr_->toString() : "null");
+    if (negated_) result += " NOT";
+    result += " BETWEEN " + (low_ ? low_->toString() : "null");
+    result += " AND " + (high_ ? high_->toString() : "null") + ")";
+    return result;
+}
+
+std::string LikeExpr::toString() const {
+    std::string result = "(" + (str_ ? str_->toString() : "null");
+    if (negated_) result += " NOT";
+    result += " LIKE " + (pattern_ ? pattern_->toString() : "null") + ")";
+    return result;
+}
+
+std::string CoalesceExpr::toString() const {
+    std::string result = "COALESCE(";
+    for (size_t i = 0; i < args_.size(); ++i) {
+        if (i > 0) result += ", ";
+        result += args_[i] ? args_[i]->toString() : "null";
+    }
+    result += ")";
+    return result;
+}
+
+std::string NullifExpr::toString() const {
+    return "NULLIF(" + (expr1_ ? expr1_->toString() : "null") + ", " +
+           (expr2_ ? expr2_->toString() : "null") + ")";
+}
+
 std::string data_type_to_string(DataType type) {
     switch (type) {
         case DataType::INT: return "INT";

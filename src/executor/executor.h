@@ -228,6 +228,12 @@ private:
     /// @return negative if a < b, 0 if equal, positive if a > b.
     int compareValues(const Value& a, const Value& b) const;
 
+    /// Match a string against a LIKE pattern.
+    /// @param str The string to match.
+    /// @param pattern The LIKE pattern (% and _ wildcards).
+    /// @return true if the string matches the pattern.
+    bool matchLikePattern(const std::string& str, const std::string& pattern) const;
+
     /// Sort result rows based on ORDER BY clause.
     /// @param stmt The SELECT statement.
     /// @param alias_map Map of column names to aliases.
