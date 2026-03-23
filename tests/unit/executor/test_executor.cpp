@@ -1993,3 +1993,43 @@ TEST_CASE("Executor: NULLIF not equal returns first", "[executor][expression][nu
     ExecutionResult result = executor.next();
     REQUIRE(result.row().get(0).asInt32() == 10);  // 10 != 20, return 10
 }
+
+// =============================================================================
+// Scalar Function Tests - String Functions (TDD)
+// =============================================================================
+
+TEST_CASE("Executor: LENGTH function", "[executor][function]") {
+    Catalog catalog;
+    Executor executor(catalog);
+    
+    // Create table
+    auto create_stmt = std::make_unique<parser::CreateTableStmt>("test");
+    create_stmt->addColumn(std::make_unique<parser::ColumnDef>(
+        "name", parser::DataTypeInfo(parser::DataType::VARCHAR)));
+    executor.execute(*create_stmt);
+    
+    // Insert test data
+    auto insert_stmt = std::make_unique<parser::InsertStmt>("test");
+    insert_stmt->addValues(std::make_unique<parser::LiteralExpr>(std::string("hello")));
+    executor.execute(*insert_stmt);
+    
+    // Parse and execute SELECT LENGTH(name) FROM test
+    parser::Lexer lexer("SELECT LENGTH(name) FROM test");
+    parser::Parser parse(lexer);
+    auto result = parse.parse();
+    REQUIRE(result.is_ok());
+    
+    auto* select_stmt = dynamic_cast<parser::SelectStmt*>(result.value().get());
+    REQUIRE(select_stmt != nullptr);
+    
+    REQUIRE(executor.prepareSelect(*select_stmt));
+    REQUIRE(executor.hasNext());
+    
+    auto exec_result = executor.next();
+    REQUIRE(exec_result.status() == ExecutionResult::Status::OK);
+    REQUIRE(exec_result.row().size() == 1);
+    REQUIRE_FALSE(exec_result.row().get(0).isNull());
+    REQUIRE(exec_result.row().get(0).asInt64() == 5);
+    
+    executor.resetQuery();
+}

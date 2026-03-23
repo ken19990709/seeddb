@@ -34,6 +34,7 @@ enum class NodeType {
     EXPR_LIKE,
     EXPR_COALESCE,
     EXPR_NULLIF,
+    EXPR_FUNCTION_CALL,  // Scalar function call
     // Definitions
     COLUMN_DEF,
     TABLE_REF
@@ -443,6 +444,25 @@ public:
 private:
     std::unique_ptr<Expr> expr1_;
     std::unique_ptr<Expr> expr2_;
+};
+
+/// Scalar function call expression (e.g., UPPER(name), LENGTH(str))
+class FunctionCallExpr : public Expr {
+public:
+    explicit FunctionCallExpr(std::string name) : name_(std::move(name)) {}
+    
+    NodeType type() const override { return NodeType::EXPR_FUNCTION_CALL; }
+    std::string toString() const override;
+    
+    const std::string& functionName() const { return name_; }
+    const auto& args() const { return args_; }
+    size_t argCount() const { return args_.size(); }
+    
+    void addArg(std::unique_ptr<Expr> arg) { args_.push_back(std::move(arg)); }
+    
+private:
+    std::string name_;
+    std::vector<std::unique_ptr<Expr>> args_;
 };
 
 /// Column definition

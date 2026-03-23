@@ -818,10 +818,34 @@ Result<std::unique_ptr<Expr>> Parser::parsePrimaryExpr() {
         return expr;
     }
 
-    // Column reference
+    // Column reference or function call
     if (check(TokenType::IDENTIFIER)) {
         std::string name = std::get<std::string>(current_token_.value);
         consume();
+
+        // Check for function call: IDENTIFIER '('
+        if (match(TokenType::LPAREN)) {
+            // This is a function call
+            auto func_expr = std::make_unique<FunctionCallExpr>(std::move(name));
+            
+            // Parse arguments if not empty
+            if (!check(TokenType::RPAREN)) {
+                do {
+                    auto arg = parseExpression();
+                    if (!arg.is_ok()) {
+                        return arg;
+                    }
+                    func_expr->addArg(std::move(arg.value()));
+                } while (match(TokenType::COMMA));
+            }
+            
+            // Expect ')'
+            if (!match(TokenType::RPAREN)) {
+                return syntax_error<std::unique_ptr<Expr>>("Expected ')' after function arguments");
+            }
+            
+            return Result<std::unique_ptr<Expr>>::ok(std::move(func_expr));
+        }
 
         // Check for table.column
         if (match(TokenType::DOT)) {

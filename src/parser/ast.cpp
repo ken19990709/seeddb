@@ -118,6 +118,16 @@ std::string NullifExpr::toString() const {
            (expr2_ ? expr2_->toString() : "null") + ")";
 }
 
+std::string FunctionCallExpr::toString() const {
+    std::string result = name_ + "(";
+    for (size_t i = 0; i < args_.size(); ++i) {
+        if (i > 0) result += ", ";
+        result += args_[i] ? args_[i]->toString() : "null";
+    }
+    result += ")";
+    return result;
+}
+
 std::string data_type_to_string(DataType type) {
     switch (type) {
         case DataType::INT: return "INT";

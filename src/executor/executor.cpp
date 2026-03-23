@@ -1,4 +1,5 @@
 #include "executor/executor.h"
+#include "executor/function.h"
 
 #include <algorithm>
 
@@ -855,6 +856,35 @@ Value Executor::evaluateExpr(const parser::Expr* expr, const Row& row, const Sch
                 return Value::null();
             }
             return expr1;
+        }
+
+        case parser::NodeType::EXPR_FUNCTION_CALL: {
+            const auto* func_expr = static_cast<const parser::FunctionCallExpr*>(expr);
+            const std::string& func_name = func_expr->functionName();
+            
+            // Lookup function in registry
+            const FunctionInfo* func_info = FunctionRegistry::instance().lookup(func_name);
+            if (!func_info) {
+                // Unknown function returns NULL
+                return Value::null();
+            }
+            
+            // Validate argument count
+            size_t arg_count = func_expr->argCount();
+            if (arg_count < func_info->min_args || arg_count > func_info->max_args) {
+                // Wrong argument count returns NULL
+                return Value::null();
+            }
+            
+            // Evaluate arguments
+            std::vector<Value> args;
+            args.reserve(arg_count);
+            for (const auto& arg : func_expr->args()) {
+                args.push_back(evaluateExpr(arg.get(), row, schema));
+            }
+            
+            // Call function implementation
+            return func_info->impl(args);
         }
 
         default:
