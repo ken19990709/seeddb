@@ -157,6 +157,36 @@ std::string TableRef::toString() const {
     return name_;
 }
 
+std::string JoinClause::toString() const {
+    std::string result;
+    
+    // Add join type
+    switch (join_type_) {
+        case JoinType::CROSS:
+            result = "CROSS JOIN ";
+            break;
+        case JoinType::INNER:
+            result = "INNER JOIN ";
+            break;
+        case JoinType::LEFT:
+            result = "LEFT JOIN ";
+            break;
+        case JoinType::RIGHT:
+            result = "RIGHT JOIN ";
+            break;
+    }
+    
+    // Add table reference
+    result += table_->toString();
+    
+    // Add ON condition if present
+    if (condition_) {
+        result += " ON " + condition_->toString();
+    }
+    
+    return result;
+}
+
 std::string CreateTableStmt::toString() const {
     std::string result = "CREATE TABLE " + table_name_ + " (";
     for (size_t i = 0; i < columns_.size(); ++i) {
