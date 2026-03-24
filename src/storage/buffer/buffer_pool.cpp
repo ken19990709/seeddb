@@ -37,15 +37,18 @@ Page* BufferPool::FetchPage(PageId page_id) {
     frame_id_t fid = findVictim();
     if (fid == INVALID_FRAME_ID) return nullptr;
 
-    // Load the page from disk (releases latch_ during I/O)
-    loadPage(fid, page_id);
-
-    page_table_[page_id] = fid;
+    // Mark frame as being loaded to prevent other threads from stealing it.
+    // We set valid=true and pin_count=1 before releasing latch_ so other
+    // threads see this frame as in-use.
     frames_[fid].page_id  = page_id;
     frames_[fid].valid    = true;
     frames_[fid].pin_count.store(1, std::memory_order_relaxed);
     frames_[fid].is_dirty.store(false, std::memory_order_relaxed);
+    page_table_[page_id] = fid;
     replacer_.Pin(fid);
+
+    // Load the page from disk (releases latch_ during I/O)
+    loadPage(fid, page_id);
 
     return &frames_[fid].page;
 }
