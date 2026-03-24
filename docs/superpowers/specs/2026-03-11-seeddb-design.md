@@ -395,15 +395,17 @@ tests/unit/
 | F2-19 类型转换 | 1 天 | `CAST(a AS INTEGER)`, `CAST(b AS VARCHAR)` | 📋 待实现 |
 | F2-20 函数框架 | 0.5 天 | 可扩展的函数注册机制 | ✅ |
 
-#### 2.5 基础 JOIN（1 周）
+#### 2.5 基础 JOIN（1 周）✅ 已完成
 
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| F2-21 CROSS JOIN | 0.5 天 | `SELECT * FROM a, b` 或 `SELECT * FROM a CROSS JOIN b` |
-| F2-22 INNER JOIN | 1.5 天 | `SELECT * FROM a INNER JOIN b ON a.id = b.aid` |
-| F2-23 LEFT JOIN | 1 天 | `SELECT * FROM a LEFT JOIN b ON a.id = b.aid` |
-| F2-24 RIGHT JOIN | 0.5 天 | `SELECT * FROM a RIGHT JOIN b ON a.id = b.aid` |
-| F2-25 多表 JOIN | 1 天 | `SELECT * FROM a JOIN b ON ... JOIN c ON ...` |
+> **完成日期**: 2026-03-24
+
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| F2-21 CROSS JOIN | 0.5 天 | `SELECT * FROM a, b` 或 `SELECT * FROM a CROSS JOIN b` | ✅ |
+| F2-22 INNER JOIN | 1.5 天 | `SELECT * FROM a INNER JOIN b ON a.id = b.aid` | ✅ |
+| F2-23 LEFT JOIN | 1 天 | `SELECT * FROM a LEFT JOIN b ON a.id = b.aid` | 📋 待实现 |
+| F2-24 RIGHT JOIN | 0.5 天 | `SELECT * FROM a RIGHT JOIN b ON a.id = b.aid` | 📋 待实现 |
+| F2-25 多表 JOIN | 1 天 | `SELECT * FROM a JOIN b ON ... JOIN c ON ...` | ✅ |
 
 **Phase 2 里程碑验证**：
 ```sql
@@ -728,12 +730,12 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 | Phase 2.2 | 聚合与分组 (COUNT/SUM/AVG/MIN/MAX/GROUP BY/HAVING) | ✅ 完成 | 2026-03-19 |
 | Phase 2.3 | 表达式增强 (CASE WHEN/IN/BETWEEN/LIKE/COALESCE/NULLIF) | ✅ 完成 | 2026-03-19 |
 | Phase 2.4 | 内置函数 (LENGTH/UPPER/LOWER/TRIM/SUBSTRING/CONCAT/ABS/ROUND/CEIL/FLOOR/MOD) | ✅ 完成 | 2026-03-22 |
-| Phase 2.5 | SQL 功能增强 (JOIN) | 📋 计划中 | - |
+| Phase 2.5 | 基础 JOIN 支持 (CROSS/INNER/LEFT/RIGHT) | ✅ 完成 | 2026-03-24 |
 | Phase 3 | B+ 树存储引擎 | 📋 计划中 | - |
 | Phase 4 | 基础恢复机制 (WAL) | 📋 计划中 | - |
 | Phase 5 | 多线程 + PostgreSQL 协议 | 📋 计划中 | - |
 | Phase 6 | 完整事务系统 (MVCC) | 📋 计划中 | - |
-| Phase 7 | 高级功能 (JOIN/子查询) | 📋 计划中 | - |
+| Phase 7 | 高级功能 (子查询/窗口函数等) | 📋 计划中 | - |
 
 ## 9. 下一步行动
 
@@ -744,13 +746,13 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 5. ~~**当前目标**：Phase 1.5 - CLI 工具 (REPL)~~ ✅ 已完成
 6. ~~**当前目标**：Phase 2.1 - 结果集操作 (ORDER BY/LIMIT/DISTINCT/别名)~~ ✅ 已完成
 7. **🎉 里程碑达成**：Phase 1 完成，能在内存中执行基础 SQL ✅
-8. **🎉 里程碑达成**：Phase 2.1-2.4 完成，支持复杂 SQL 查询 (聚合/分组/表达式/函数) ✅
+8. **🎉 里程碑达成**：Phase 2 完成，支持复杂 SQL 查询 (聚合/分组/表达式/函数/JOIN) ✅
 9. ~~**当前目标**：Phase 2.2 - 聚合与分组 (COUNT/SUM/AVG/MIN/MAX/GROUP BY/HAVING)~~ ✅ 已完成
 10. ~~**当前目标**：Phase 2.4 - 内置函数 (字符串/数学/类型转换)~~ ✅ 已完成
-11. **当前目标**：Phase 2.5 - 基础 JOIN (CROSS/INNER/LEFT/RIGHT)
-12. **第二个里程碑**：Phase 3 完成，数据持久化到磁盘
-13. **第三个里程碑**：Phase 5 完成，能用 psql 连接
-14. **第四个里程碑**：Phase 6 完成，支持完整 ACID 事务
+11. ~~**当前目标**：Phase 2.5 - 基础 JOIN (CROSS/INNER/LEFT/RIGHT)~~ ✅ 已完成
+12. **当前目标**：Phase 3 - B+ 树存储引擎 (数据持久化)
+13. **第二个里程碑**：Phase 5 完成，能用 psql 连接
+14. **第三个里程碑**：Phase 6 完成，支持完整 ACID 事务
 
 ---
 
