@@ -39,6 +39,7 @@ public:
     std::string data_directory() const { return get("data_directory", "./data"); }
     std::string listen_address() const { return get("listen_address", "0.0.0.0"); }
     int buffer_pool_size() const { return get_int("buffer_pool_size", 1024); }
+    int buffer_pool_old_pct() const { return get_int("buffer_pool_old_pct", 37); }
     int page_size() const { return get_int("page_size", 8192); }
 
 private:
