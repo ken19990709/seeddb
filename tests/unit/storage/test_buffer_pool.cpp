@@ -2,6 +2,7 @@
 // Unit tests for LruReplacer and BufferPool
 // =============================================================================
 #include <catch2/catch_all.hpp>
+#include <chrono>
 #include "storage/buffer/lru_replacer.h"
 
 using namespace seeddb;
@@ -295,4 +296,99 @@ TEST_CASE("BufferPool - WLatch/WUnlatch sequence on pinned page succeeds", "[buf
     bp.WLatchPage(pid);
     bp.WUnlatchPage(pid);
     bp.UnpinPage(pid, false);
+}
+
+// ---------------------------------------------------------------------------
+// BufferPool – concurrent access (B3-8)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BufferPool - multiple threads fetch/unpin different pages", "[buffer_pool]") {
+    BpFixture f(6);
+    BufferPool bp(f.pm, f.cfg);
+
+    constexpr int NTHREADS = 4;
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < NTHREADS; ++t) {
+        threads.emplace_back([&, t]() {
+            PageId pid{f.file_id, static_cast<uint32_t>(t)};
+            for (int iter = 0; iter < 50; ++iter) {
+                Page* p = bp.FetchPage(pid);
+                REQUIRE(p != nullptr);
+                bp.UnpinPage(pid, false);
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+    REQUIRE(bp.pinnedCount() == 0);
+}
+
+TEST_CASE("BufferPool - multiple threads read-latch same page concurrently", "[buffer_pool]") {
+    BpFixture f;
+    BufferPool bp(f.pm, f.cfg);
+
+    PageId pid{f.file_id, 0};
+    // Pre-load page
+    bp.FetchPage(pid);
+    bp.UnpinPage(pid, false);
+
+    constexpr int NTHREADS = 4;
+    std::atomic<int> readers_inside{0};
+    std::atomic<bool> overlap_detected{false};
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < NTHREADS; ++t) {
+        threads.emplace_back([&]() {
+            bp.FetchPage(pid);
+            bp.RLatchPage(pid);
+            int count = readers_inside.fetch_add(1) + 1;
+            if (count > 1) overlap_detected.store(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            readers_inside.fetch_sub(1);
+            bp.RUnlatchPage(pid);
+            bp.UnpinPage(pid, false);
+        });
+    }
+    for (auto& th : threads) th.join();
+    // shared_mutex allows multiple readers; overlap should have occurred
+    REQUIRE(overlap_detected.load());
+}
+
+TEST_CASE("BufferPool - writer excludes readers", "[buffer_pool]") {
+    BpFixture f;
+    BufferPool bp(f.pm, f.cfg);
+
+    PageId pid{f.file_id, 0};
+    bp.FetchPage(pid);
+    bp.UnpinPage(pid, false);
+
+    std::atomic<bool> writer_inside{false};
+    std::atomic<bool> reader_saw_writer{false};
+    std::vector<std::thread> threads;
+
+    // Writer thread holds WLatch for a short period
+    threads.emplace_back([&]() {
+        bp.FetchPage(pid);
+        bp.WLatchPage(pid);
+        writer_inside.store(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        writer_inside.store(false);
+        bp.WUnlatchPage(pid);
+        bp.UnpinPage(pid, false);
+    });
+
+    // Reader threads: if they can acquire RLatch while writer is inside, that is a bug
+    for (int i = 0; i < 3; ++i) {
+        threads.emplace_back([&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            bp.FetchPage(pid);
+            bp.RLatchPage(pid);
+            if (writer_inside.load()) reader_saw_writer.store(true);
+            bp.RUnlatchPage(pid);
+            bp.UnpinPage(pid, false);
+        });
+    }
+
+    for (auto& th : threads) th.join();
+    REQUIRE_FALSE(reader_saw_writer.load());
 }
