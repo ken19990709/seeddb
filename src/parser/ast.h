@@ -37,7 +37,8 @@ enum class NodeType {
     EXPR_FUNCTION_CALL,  // Scalar function call
     // Definitions
     COLUMN_DEF,
-    TABLE_REF
+    TABLE_REF,
+    JOIN_CLAUSE  // Join clause node
 };
 
 /// Aggregate function types
@@ -47,6 +48,14 @@ enum class AggregateType {
     AVG,
     MIN,
     MAX
+};
+
+/// Join type enumeration
+enum class JoinType {
+    CROSS,      // CROSS JOIN or comma-separated
+    INNER,      // INNER JOIN ... ON
+    LEFT,       // LEFT [OUTER] JOIN ... ON
+    RIGHT       // RIGHT [OUTER] JOIN ... ON
 };
 
 /// Data type enumeration
@@ -505,6 +514,28 @@ private:
     std::string alias_;
 };
 
+/// Join clause (represents a table join)
+class JoinClause : public ASTNode {
+public:
+    JoinClause(JoinType type, std::unique_ptr<TableRef> table, 
+               std::unique_ptr<Expr> condition = nullptr)
+        : join_type_(type), table_(std::move(table)), 
+          condition_(std::move(condition)) {}
+    
+    NodeType type() const override { return NodeType::JOIN_CLAUSE; }
+    std::string toString() const override;
+    
+    JoinType joinType() const { return join_type_; }
+    const TableRef* table() const { return table_.get(); }
+    const Expr* condition() const { return condition_.get(); }
+    bool hasCondition() const { return condition_ != nullptr; }
+    
+private:
+    JoinType join_type_;
+    std::unique_ptr<TableRef> table_;
+    std::unique_ptr<Expr> condition_;  // nullptr for CROSS JOIN
+};
+
 /// CREATE TABLE statement
 class CreateTableStmt : public Stmt {
 public:
@@ -581,6 +612,13 @@ public:
     void addOrderBy(OrderByItem item) { order_by_.push_back(std::move(item)); }
     void setLimit(int64_t limit) { limit_ = limit; }
     void setOffset(int64_t offset) { offset_ = offset; }
+    
+    // Join support
+    const auto& joins() const { return joins_; }
+    bool hasJoins() const { return !joins_.empty(); }
+    void addJoin(std::unique_ptr<JoinClause> join) { 
+        joins_.push_back(std::move(join)); 
+    }
 
 private:
     bool select_all_ = false;
@@ -593,6 +631,7 @@ private:
     std::vector<OrderByItem> order_by_;
     std::optional<int64_t> limit_;
     std::optional<int64_t> offset_;
+    std::vector<std::unique_ptr<JoinClause>> joins_;  // Additional tables with join type
 };
 
 /// INSERT statement
