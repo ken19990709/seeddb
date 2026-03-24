@@ -243,6 +243,54 @@ private:
                         const Schema& result_schema);
 
     // =========================================================================
+    // JOIN Helper Methods
+    // =========================================================================
+
+    /// Process JOIN operations for a SELECT statement.
+    /// @param stmt The SELECT statement.
+    /// @return true if joins processed successfully, false otherwise.
+    bool processJoins(const parser::SelectStmt& stmt);
+
+    /// Build schema for joined tables.
+    /// @param stmt The SELECT statement.
+    /// @param schemas Map of table names to their schemas.
+    /// @return Combined schema for all tables.
+    Schema buildJoinedSchema(const parser::SelectStmt& stmt,
+                            const std::unordered_map<std::string, const Schema*>& schemas) const;
+
+    /// Resolve column reference in joined context.
+    /// @param col_ref The column reference.
+    /// @param schemas Map of table names to schemas.
+    /// @param table_aliases Map of aliases to table names.
+    /// @return Pair of schema pointer and column index, or nullptr if not found.
+    std::pair<const Schema*, size_t> resolveColumnInJoinedContext(
+        const parser::ColumnRef* col_ref,
+        const std::unordered_map<std::string, const Schema*>& schemas,
+        const std::unordered_map<std::string, std::string>& table_aliases) const;
+
+    /// Perform cross join between two result sets.
+    /// @param left_rows Left operand rows.
+    /// @param right_rows Right operand rows.
+    /// @return Cartesian product of rows.
+    std::vector<std::pair<Row, Row>> crossJoinRows(
+        const std::vector<Row>& left_rows,
+        const std::vector<Row>& right_rows) const;
+
+    /// Perform inner join with condition.
+    /// @param left_rows Left operand rows.
+    /// @param right_rows Right operand rows.
+    /// @param condition The join condition.
+    /// @param left_schema Left table schema.
+    /// @param right_schema Right table schema.
+    /// @return Joined rows that satisfy the condition.
+    std::vector<std::pair<Row, Row>> innerJoinRows(
+        const std::vector<Row>& left_rows,
+        const std::vector<Row>& right_rows,
+        const parser::Expr* condition,
+        const Schema& left_schema,
+        const Schema& right_schema) const;
+
+    // =========================================================================
     // Aggregate Helper Methods
     // =========================================================================
 
@@ -369,6 +417,12 @@ private:
     Table* current_table_ = nullptr;           ///< Current table being queried.
     std::vector<Row> result_rows_;             ///< Result rows (projected, distinct, sorted).
     size_t current_row_index_ = 0;             ///< Current position in result_rows_.
+    
+    // JOIN state
+    std::unordered_map<std::string, const Schema*> table_schemas_;  ///< Map of table names to schemas
+    std::unordered_map<std::string, std::string> table_aliases_;     ///< Map of aliases to table names
+    std::vector<Row> joined_rows_;                                   ///< Rows after JOIN operations
+    Schema joined_schema_;                                           ///< Combined schema for joined tables
 
     Catalog& catalog_;
 };

@@ -325,6 +325,12 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
     // Reset any previous query state
     resetQuery();
 
+    // Handle JOIN queries
+    if (stmt.hasJoins()) {
+        return processJoins(stmt);
+    }
+
+    // Original single-table logic
     // Get table name from FROM clause
     const parser::TableRef* table_ref = stmt.fromTable();
     if (!table_ref) {
@@ -499,6 +505,12 @@ void Executor::resetQuery() {
     current_table_ = nullptr;
     result_rows_.clear();
     current_row_index_ = 0;
+    
+    // Reset JOIN state
+    table_schemas_.clear();
+    table_aliases_.clear();
+    joined_rows_.clear();
+    joined_schema_ = Schema(std::vector<ColumnSchema>{});
 }
 
 // =============================================================================
@@ -1005,6 +1017,332 @@ void Executor::sortResultRows(const parser::SelectStmt& stmt,
             }
             return false;  // All columns equal, maintain original order
         });
+}
+
+// =============================================================================
+// JOIN Implementation
+// =============================================================================
+
+bool Executor::processJoins(const parser::SelectStmt& stmt) {
+    // Collect all tables involved in the query
+    std::vector<const parser::TableRef*> all_tables;
+    
+    // Add base table from FROM clause
+    if (stmt.fromTable()) {
+        all_tables.push_back(stmt.fromTable());
+    }
+    
+    // Add joined tables
+    for (const auto& join : stmt.joins()) {
+        all_tables.push_back(join->table());
+    }
+    
+    if (all_tables.empty()) {
+        return false;
+    }
+    
+    // Validate all tables exist and build schema map
+    std::vector<Table*> tables;
+    table_schemas_.clear();
+    table_aliases_.clear();
+    
+    for (const auto* table_ref : all_tables) {
+        const std::string& table_name = table_ref->name();
+        
+        // Check if table exists
+        if (!catalog_.hasTable(table_name)) {
+            return false;
+        }
+        
+        Table* table = catalog_.getTable(table_name);
+        if (!table) {
+            return false;
+        }
+        
+        tables.push_back(table);
+        table_schemas_[table_name] = &table->schema();
+        
+        // Store alias mapping
+        if (table_ref->hasAlias()) {
+            table_aliases_[table_ref->alias()] = table_name;
+        } else {
+            table_aliases_[table_name] = table_name;  // Self-mapping for unaliased tables
+        }
+    }
+    
+    // Build combined schema for all tables
+    joined_schema_ = buildJoinedSchema(stmt, table_schemas_);
+    
+    // Start with the first table's rows
+    std::vector<Row> current_rows;
+    for (size_t i = 0; i < tables[0]->rowCount(); ++i) {
+        current_rows.push_back(tables[0]->get(i));
+    }
+    
+    // Process each join in sequence
+    const Schema* left_schema = table_schemas_[all_tables[0]->name()];
+    
+    for (size_t join_idx = 0; join_idx < stmt.joins().size(); ++join_idx) {
+        const auto& join = stmt.joins()[join_idx];
+        const parser::TableRef* right_table_ref = join->table();
+        const std::string& right_table_name = right_table_ref->name();
+        const Schema* right_schema = table_schemas_[right_table_name];
+        
+        // Get right table rows
+        Table* right_table = catalog_.getTable(right_table_name);
+        std::vector<Row> right_rows;
+        for (size_t i = 0; i < right_table->rowCount(); ++i) {
+            right_rows.push_back(right_table->get(i));
+        }
+        
+        // Perform join based on type
+        std::vector<std::pair<Row, Row>> joined_pairs;
+        
+        switch (join->joinType()) {
+            case parser::JoinType::CROSS:
+                joined_pairs = crossJoinRows(current_rows, right_rows);
+                break;
+                
+            case parser::JoinType::INNER:
+                if (!join->hasCondition()) {
+                    // No condition means cross join
+                    joined_pairs = crossJoinRows(current_rows, right_rows);
+                } else {
+                    joined_pairs = innerJoinRows(current_rows, right_rows, 
+                                               join->condition(), *left_schema, *right_schema);
+                }
+                break;
+                
+            default:
+                // Unsupported join type for now
+                return false;
+        }
+        
+        // Combine paired rows into single rows
+        std::vector<Row> next_rows;
+        for (const auto& pair : joined_pairs) {
+            // Concatenate left and right rows
+            std::vector<Value> combined_values;
+            combined_values.reserve(pair.first.size() + pair.second.size());
+            
+            for (size_t i = 0; i < pair.first.size(); ++i) {
+                combined_values.push_back(pair.first.get(i));
+            }
+            for (size_t i = 0; i < pair.second.size(); ++i) {
+                combined_values.push_back(pair.second.get(i));
+            }
+            
+            next_rows.emplace_back(std::move(combined_values));
+        }
+        
+        current_rows = std::move(next_rows);
+        left_schema = &joined_schema_;  // Updated schema after join
+    }
+    
+    joined_rows_ = std::move(current_rows);
+    
+    // Apply WHERE clause if present
+    const parser::Expr* where_clause = stmt.whereClause();
+    if (where_clause) {
+        std::vector<Row> filtered_rows;
+        for (const auto& row : joined_rows_) {
+            if (evaluateWhereClause(where_clause, row, joined_schema_)) {
+                filtered_rows.push_back(row);
+            }
+        }
+        joined_rows_ = std::move(filtered_rows);
+    }
+    
+    // Project rows according to SELECT clause
+    std::unordered_map<std::string, std::string> alias_map;
+    result_rows_.clear();
+    
+    for (const auto& row : joined_rows_) {
+        Row projected = projectRow(row, joined_schema_, stmt, alias_map);
+        result_rows_.push_back(std::move(projected));
+    }
+    
+    // Apply DISTINCT if specified
+    if (stmt.isDistinct()) {
+        std::vector<Row> unique_rows;
+        for (const auto& row : result_rows_) {
+            bool is_duplicate = false;
+            for (const auto& unique_row : unique_rows) {
+                if (rowsEqual(row, unique_row)) {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+            if (!is_duplicate) {
+                unique_rows.push_back(row);
+            }
+        }
+        result_rows_ = std::move(unique_rows);
+    }
+    
+    // Apply ORDER BY if specified
+    if (stmt.hasOrderBy()) {
+        sortResultRows(stmt, alias_map, joined_schema_);
+    }
+    
+    // Apply LIMIT and OFFSET
+    if (stmt.hasLimit() || stmt.hasOffset()) {
+        size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
+        size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
+        
+        if (offset >= result_rows_.size()) {
+            result_rows_.clear();
+        } else {
+            size_t end_index = std::min(offset + limit, result_rows_.size());
+            std::vector<Row> limited_rows;
+            for (size_t i = offset; i < end_index; ++i) {
+                limited_rows.push_back(std::move(result_rows_[i]));
+            }
+            result_rows_ = std::move(limited_rows);
+        }
+    }
+    
+    return true;
+}
+
+// =============================================================================
+// JOIN Helper Methods
+// =============================================================================
+
+Schema Executor::buildJoinedSchema(const parser::SelectStmt& stmt,
+                                  const std::unordered_map<std::string, const Schema*>& schemas) const {
+    std::vector<ColumnSchema> columns;
+    
+    // Add columns from base table
+    if (stmt.fromTable()) {
+        const std::string& table_name = stmt.fromTable()->name();
+        auto it = schemas.find(table_name);
+        if (it != schemas.end()) {
+            const Schema* schema = it->second;
+            for (size_t i = 0; i < schema->columnCount(); ++i) {
+                columns.push_back(schema->column(i));
+            }
+        }
+    }
+    
+    // Add columns from joined tables
+    for (const auto& join : stmt.joins()) {
+        const std::string& table_name = join->table()->name();
+        auto it = schemas.find(table_name);
+        if (it != schemas.end()) {
+            const Schema* schema = it->second;
+            for (size_t i = 0; i < schema->columnCount(); ++i) {
+                columns.push_back(schema->column(i));
+            }
+        }
+    }
+    
+    return Schema(std::move(columns));
+}
+
+std::pair<const Schema*, size_t> Executor::resolveColumnInJoinedContext(
+    const parser::ColumnRef* col_ref,
+    const std::unordered_map<std::string, const Schema*>& schemas,
+    const std::unordered_map<std::string, std::string>& table_aliases) const {
+    
+    const std::string& column_name = col_ref->column();
+    
+    // If column has table qualifier
+    if (col_ref->hasTableQualifier()) {
+        const std::string& table_qualifier = col_ref->table();
+        
+        // Resolve alias to actual table name
+        auto alias_it = table_aliases.find(table_qualifier);
+        if (alias_it == table_aliases.end()) {
+            return {nullptr, 0};
+        }
+        
+        const std::string& actual_table_name = alias_it->second;
+        
+        // Find schema for the table
+        auto schema_it = schemas.find(actual_table_name);
+        if (schema_it == schemas.end()) {
+            return {nullptr, 0};
+        }
+        
+        const Schema* schema = schema_it->second;
+        auto col_idx = schema->columnIndex(column_name);
+        if (!col_idx.has_value()) {
+            return {nullptr, 0};
+        }
+        
+        return {schema, col_idx.value()};
+    } else {
+        // No table qualifier - search all schemas
+        for (const auto& [table_name, schema] : schemas) {
+            auto col_idx = schema->columnIndex(column_name);
+            if (col_idx.has_value()) {
+                return {schema, col_idx.value()};
+            }
+        }
+    }
+    
+    return {nullptr, 0};
+}
+
+std::vector<std::pair<Row, Row>> Executor::crossJoinRows(
+    const std::vector<Row>& left_rows,
+    const std::vector<Row>& right_rows) const {
+    
+    std::vector<std::pair<Row, Row>> result;
+    result.reserve(left_rows.size() * right_rows.size());
+    
+    for (const auto& left_row : left_rows) {
+        for (const auto& right_row : right_rows) {
+            result.emplace_back(left_row, right_row);
+        }
+    }
+    
+    return result;
+}
+
+std::vector<std::pair<Row, Row>> Executor::innerJoinRows(
+    const std::vector<Row>& left_rows,
+    const std::vector<Row>& right_rows,
+    const parser::Expr* condition,
+    const Schema& left_schema,
+    const Schema& right_schema) const {
+    
+    std::vector<std::pair<Row, Row>> result;
+    
+    // Create combined schema for evaluation
+    std::vector<ColumnSchema> combined_columns;
+    for (size_t i = 0; i < left_schema.columnCount(); ++i) {
+        combined_columns.push_back(left_schema.column(i));
+    }
+    for (size_t i = 0; i < right_schema.columnCount(); ++i) {
+        combined_columns.push_back(right_schema.column(i));
+    }
+    Schema combined_schema(std::move(combined_columns));
+    
+    for (const auto& left_row : left_rows) {
+        for (const auto& right_row : right_rows) {
+            // Create combined row for condition evaluation
+            std::vector<Value> combined_values;
+            combined_values.reserve(left_row.size() + right_row.size());
+            
+            for (size_t i = 0; i < left_row.size(); ++i) {
+                combined_values.push_back(left_row.get(i));
+            }
+            for (size_t i = 0; i < right_row.size(); ++i) {
+                combined_values.push_back(right_row.get(i));
+            }
+            
+            Row combined_row(std::move(combined_values));
+            
+            // Evaluate join condition
+            if (evaluateWhereClause(condition, combined_row, combined_schema)) {
+                result.emplace_back(left_row, right_row);
+            }
+        }
+    }
+    
+    return result;
 }
 
 // =============================================================================
