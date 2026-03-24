@@ -30,6 +30,11 @@ target_sources(seeddb_tests
         unit/parser/test_ast.cpp
         unit/parser/test_parser.cpp
         unit/storage/test_storage.cpp
+        unit/storage/test_page_id.cpp
+        unit/storage/test_page_header.cpp
+        unit/storage/test_page.cpp
+        unit/storage/test_disk_manager.cpp
+        unit/storage/test_page_manager.cpp
         unit/executor/test_executor.cpp
         unit/cli/test_formatter.cpp
 )
