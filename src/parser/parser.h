@@ -75,6 +75,9 @@ private:
     // Table reference
     Result<std::unique_ptr<TableRef>> parseTableRef();
 
+    // Join clause parsing
+    Result<std::unique_ptr<JoinClause>> parseJoinClause();
+
     // Column parsing
     Result<std::vector<std::unique_ptr<ColumnDef>>> parseColumnDefList();
     Result<std::unique_ptr<ColumnDef>> parseColumnDef();

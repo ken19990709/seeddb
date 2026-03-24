@@ -1102,3 +1102,171 @@ TEST_CASE("Parser: Complex expressions combined", "[parser][expression]") {
         REQUIRE(result.is_ok());
     }
 }
+
+TEST_CASE("Parser: JOIN support", "[parser][join]") {
+    SECTION("Comma-separated tables (implicit CROSS JOIN)") {
+        std::string sql = "SELECT * FROM users, orders";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_SELECT);
+        
+        auto* select = dynamic_cast<const SelectStmt*>(stmt.get());
+        REQUIRE(select != nullptr);
+        REQUIRE(select->fromTable() != nullptr);
+        REQUIRE(select->hasJoins());
+        REQUIRE(select->joins().size() == 1);
+        
+        const auto& join = select->joins()[0];
+        REQUIRE(join->joinType() == JoinType::CROSS);
+        REQUIRE(join->table()->name() == "orders");
+        REQUIRE(!join->hasCondition());
+    }
+    
+    SECTION("Three table comma-separated CROSS JOIN") {
+        std::string sql = "SELECT * FROM a, b, c";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        REQUIRE(select->joins().size() == 2);
+        REQUIRE(select->joins()[0]->joinType() == JoinType::CROSS);
+        REQUIRE(select->joins()[0]->table()->name() == "b");
+        REQUIRE(select->joins()[1]->joinType() == JoinType::CROSS);
+        REQUIRE(select->joins()[1]->table()->name() == "c");
+    }
+    
+    SECTION("Explicit CROSS JOIN") {
+        std::string sql = "SELECT * FROM users CROSS JOIN orders";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        REQUIRE(select->hasJoins());
+        REQUIRE(select->joins().size() == 1);
+        
+        const auto& join = select->joins()[0];
+        REQUIRE(join->joinType() == JoinType::CROSS);
+        REQUIRE(join->table()->name() == "orders");
+        REQUIRE(!join->hasCondition());
+    }
+    
+    SECTION("INNER JOIN with ON clause") {
+        std::string sql = "SELECT * FROM users u INNER JOIN orders o ON u.id = o.user_id";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        REQUIRE(select->hasJoins());
+        REQUIRE(select->joins().size() == 1);
+        
+        const auto& join = select->joins()[0];
+        REQUIRE(join->joinType() == JoinType::INNER);
+        REQUIRE(join->table()->name() == "orders");
+        REQUIRE(join->table()->alias() == "o");
+        REQUIRE(join->hasCondition());
+    }
+    
+    SECTION("LEFT JOIN with ON clause") {
+        std::string sql = "SELECT * FROM users LEFT JOIN orders ON users.id = orders.user_id";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        REQUIRE(select->hasJoins());
+        
+        const auto& join = select->joins()[0];
+        REQUIRE(join->joinType() == JoinType::LEFT);
+        REQUIRE(join->hasCondition());
+    }
+    
+    SECTION("RIGHT JOIN with ON clause") {
+        std::string sql = "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        const auto& join = select->joins()[0];
+        REQUIRE(join->joinType() == JoinType::RIGHT);
+        REQUIRE(join->hasCondition());
+    }
+    
+    SECTION("Multiple JOINs") {
+        std::string sql = "SELECT * FROM users "
+                         "INNER JOIN orders ON users.id = orders.user_id "
+                         "INNER JOIN products ON orders.product_id = products.id";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        REQUIRE(select->joins().size() == 2);
+        
+        REQUIRE(select->joins()[0]->joinType() == JoinType::INNER);
+        REQUIRE(select->joins()[0]->table()->name() == "orders");
+        
+        REQUIRE(select->joins()[1]->joinType() == JoinType::INNER);
+        REQUIRE(select->joins()[1]->table()->name() == "products");
+    }
+    
+    SECTION("Mixed comma and explicit JOIN") {
+        std::string sql = "SELECT * FROM a, b INNER JOIN c ON b.id = c.b_id";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto* select = dynamic_cast<const SelectStmt*>(result.value().get());
+        REQUIRE(select->joins().size() == 2);
+        
+        // First join: comma-separated (CROSS)
+        REQUIRE(select->joins()[0]->joinType() == JoinType::CROSS);
+        REQUIRE(select->joins()[0]->table()->name() == "b");
+        
+        // Second join: INNER JOIN
+        REQUIRE(select->joins()[1]->joinType() == JoinType::INNER);
+        REQUIRE(select->joins()[1]->table()->name() == "c");
+        REQUIRE(select->joins()[1]->hasCondition());
+    }
+    
+    SECTION("JOIN toString roundtrip") {
+        std::string sql = "SELECT * FROM users INNER JOIN orders ON users.id = orders.user_id";
+        Lexer lexer(sql);
+        Parser parser(lexer);
+        
+        auto result = parser.parse();
+        REQUIRE(result.is_ok());
+        
+        auto& stmt = result.value();
+        REQUIRE(stmt->type() == NodeType::STMT_SELECT);
+        
+        auto* select = dynamic_cast<const SelectStmt*>(stmt.get());
+        std::string output = select->toString();
+        
+        // Verify output contains INNER JOIN
+        REQUIRE(output.find("INNER JOIN") != std::string::npos);
+        REQUIRE(output.find("ON") != std::string::npos);
+    }
+}

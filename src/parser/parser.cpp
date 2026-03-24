@@ -305,6 +305,30 @@ Result<std::unique_ptr<SelectStmt>> Parser::parseSelect() {
     }
     stmt->setFromTable(std::move(table.value()));
 
+    // Parse comma-separated tables (implicit CROSS JOIN)
+    while (match(TokenType::COMMA)) {
+        auto next_table = parseTableRef();
+        if (!next_table.is_ok()) {
+            return Result<std::unique_ptr<SelectStmt>>::err(next_table.error());
+        }
+        // Create CROSS JOIN clause for comma-separated table
+        stmt->addJoin(std::make_unique<JoinClause>(
+            JoinType::CROSS,
+            std::move(next_table.value())
+        ));
+    }
+
+    // Parse explicit JOIN clauses
+    while (check(TokenType::INNER) || check(TokenType::LEFT) || 
+           check(TokenType::RIGHT) || check(TokenType::CROSS) || 
+           check(TokenType::JOIN)) {
+        auto join = parseJoinClause();
+        if (!join.is_ok()) {
+            return Result<std::unique_ptr<SelectStmt>>::err(join.error());
+        }
+        stmt->addJoin(std::move(join.value()));
+    }
+
     // Optional WHERE
     if (match(TokenType::WHERE)) {
         auto where = parseExpression();
@@ -890,6 +914,58 @@ Result<std::unique_ptr<TableRef>> Parser::parseTableRef() {
 
     return Result<std::unique_ptr<TableRef>>::ok(
         std::make_unique<TableRef>(std::move(name), std::move(alias)));
+}
+
+// Parse join clause
+Result<std::unique_ptr<JoinClause>> Parser::parseJoinClause() {
+    // Determine join type
+    JoinType join_type;
+    
+    if (match(TokenType::INNER)) {
+        join_type = JoinType::INNER;
+    } else if (match(TokenType::LEFT)) {
+        join_type = JoinType::LEFT;
+    } else if (match(TokenType::RIGHT)) {
+        join_type = JoinType::RIGHT;
+    } else if (match(TokenType::CROSS)) {
+        join_type = JoinType::CROSS;
+    } else {
+        // Default to INNER if just JOIN keyword
+        join_type = JoinType::INNER;
+    }
+    
+    // Consume JOIN keyword
+    if (!match(TokenType::JOIN)) {
+        return syntax_error<std::unique_ptr<JoinClause>>("Expected JOIN keyword");
+    }
+    
+    // Parse table reference
+    auto table = parseTableRef();
+    if (!table.is_ok()) {
+        return Result<std::unique_ptr<JoinClause>>::err(table.error());
+    }
+    
+    // Parse ON condition (required for INNER/LEFT/RIGHT, not allowed for CROSS)
+    std::unique_ptr<Expr> condition = nullptr;
+    if (match(TokenType::ON)) {
+        if (join_type == JoinType::CROSS) {
+            return syntax_error<std::unique_ptr<JoinClause>>(
+                "CROSS JOIN cannot have ON clause");
+        }
+        auto cond = parseExpression();
+        if (!cond.is_ok()) {
+            return Result<std::unique_ptr<JoinClause>>::err(cond.error());
+        }
+        condition = std::move(cond.value());
+    } else if (join_type != JoinType::CROSS) {
+        // INNER/LEFT/RIGHT JOIN requires ON clause
+        return syntax_error<std::unique_ptr<JoinClause>>(
+            "Expected ON clause for JOIN");
+    }
+    
+    return Result<std::unique_ptr<JoinClause>>::ok(
+        std::make_unique<JoinClause>(join_type, std::move(table.value()), 
+                                     std::move(condition)));
 }
 
 // Parse aggregate function expression

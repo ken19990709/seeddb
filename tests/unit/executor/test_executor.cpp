@@ -7,6 +7,8 @@
 #include "storage/row.h"
 #include "storage/catalog.h"
 #include "parser/ast.h"
+#include "parser/parser.h"
+#include "parser/lexer.h"
 
 using namespace seeddb;
 using Catch::Approx;

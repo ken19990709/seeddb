@@ -220,6 +220,17 @@ std::string SelectStmt::toString() const {
     }
     if (from_table_) {
         result += " FROM " + from_table_->toString();
+        
+        // Add joins
+        for (const auto& join : joins_) {
+            if (join->joinType() == parser::JoinType::CROSS && !join->hasCondition()) {
+                // Comma-separated syntax
+                result += ", " + join->table()->toString();
+            } else {
+                // Explicit JOIN syntax
+                result += " " + join->toString();
+            }
+        }
     }
     if (where_clause_) {
         result += " WHERE " + where_clause_->toString();

@@ -524,7 +524,7 @@ public:
     
     NodeType type() const override { return NodeType::JOIN_CLAUSE; }
     std::string toString() const override;
-    
+ 
     JoinType joinType() const { return join_type_; }
     const TableRef* table() const { return table_.get(); }
     const Expr* condition() const { return condition_.get(); }
