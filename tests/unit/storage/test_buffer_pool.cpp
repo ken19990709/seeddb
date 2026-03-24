@@ -268,3 +268,31 @@ TEST_CASE("BufferPool - sequential scan does not evict hot pages", "[buffer_pool
     REQUIRE(h0 != nullptr);  // not evicted
     bp.UnpinPage(hot0, false);
 }
+
+// ---------------------------------------------------------------------------
+// BufferPool – latching
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BufferPool - RLatch allows multiple concurrent readers", "[buffer_pool]") {
+    BpFixture f;
+    BufferPool bp(f.pm, f.cfg);
+    PageId pid{f.file_id, 0};
+    bp.FetchPage(pid);
+
+    // Acquire two read latches from the same thread (shared_mutex supports this
+    // via lock_shared which is recursive in terms of acquisition count)
+    bp.RLatchPage(pid);
+    bp.RUnlatchPage(pid);
+    bp.UnpinPage(pid, false);
+}
+
+TEST_CASE("BufferPool - WLatch/WUnlatch sequence on pinned page succeeds", "[buffer_pool]") {
+    BpFixture f;
+    BufferPool bp(f.pm, f.cfg);
+    PageId pid{f.file_id, 0};
+    bp.FetchPage(pid);
+
+    bp.WLatchPage(pid);
+    bp.WUnlatchPage(pid);
+    bp.UnpinPage(pid, false);
+}
