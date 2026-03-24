@@ -4,8 +4,10 @@
 #include <iostream>
 
 #include "cli/repl.h"
+#include "common/config.h"
 #include "executor/executor.h"
 #include "storage/catalog.h"
+#include "storage/storage_manager.h"
 
 using namespace seeddb;
 
@@ -40,8 +42,14 @@ int main(int argc, char* argv[]) {
     }
 
     // Initialize database components
+    Config config;
+    config.load("seeddb.conf");
+
+    StorageManager storage_mgr(config.data_directory());
     Catalog catalog;
-    Executor executor(catalog);
+    storage_mgr.load(catalog);
+
+    Executor executor(catalog, &storage_mgr);
 
     // Run the REPL
     cli::Repl repl(catalog, executor);

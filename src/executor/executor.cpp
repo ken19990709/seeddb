@@ -1,5 +1,6 @@
 #include "executor/executor.h"
 #include "executor/function.h"
+#include "storage/storage_manager.h"
 
 #include <algorithm>
 
@@ -13,6 +14,9 @@ namespace seeddb {
 // =============================================================================
 
 Executor::Executor(Catalog& catalog) : catalog_(catalog) {}
+
+Executor::Executor(Catalog& catalog, StorageManager* storage_mgr)
+    : catalog_(catalog), storage_mgr_(storage_mgr) {}
 
 // =============================================================================
 // DDL Execution
@@ -51,6 +55,11 @@ ExecutionResult Executor::execute(const parser::CreateTableStmt& stmt) {
         );
     }
 
+    // Persist to disk if storage is available
+    if (storage_mgr_) {
+        storage_mgr_->onCreateTable(table_name, catalog_.getTable(table_name)->schema());
+    }
+
     return ExecutionResult::empty();
 }
 
@@ -70,6 +79,9 @@ ExecutionResult Executor::execute(const parser::DropTableStmt& stmt) {
     }
 
     // Drop the table
+    if (storage_mgr_) {
+        storage_mgr_->onDropTable(table_name);
+    }
     catalog_.dropTable(table_name);
 
     return ExecutionResult::empty();
@@ -176,6 +188,9 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
     }
 
     // Insert the row into the table
+    if (storage_mgr_) {
+        storage_mgr_->appendRow(table_name, row, schema);
+    }
     table->insert(std::move(row));
 
     return ExecutionResult::empty();
@@ -258,6 +273,12 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
         // Store update count for CLI to display
     // For now, return empty result (CLI will show "UPDATE N" separately)
     (void)update_count;  // Will be used later for result display
+
+    // Persist updated table to disk
+    if (storage_mgr_) {
+        storage_mgr_->checkpoint(table_name, *table);
+    }
+
     return ExecutionResult::empty();
 }
 
@@ -291,6 +312,12 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
     table->removeBulk(rows_to_delete);
 
     (void)delete_count;  // Will be used later for result display
+
+    // Persist updated table to disk
+    if (storage_mgr_) {
+        storage_mgr_->checkpoint(table_name, *table);
+    }
+
     return ExecutionResult::empty();
 }
 

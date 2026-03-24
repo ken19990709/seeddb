@@ -12,6 +12,9 @@
 #include "parser/ast.h"
 #include "executor/aggregate.h"
 
+// Forward declaration – avoids a heavy include in the header
+namespace seeddb { class StorageManager; }
+
 namespace seeddb {
 
 // =============================================================================
@@ -124,6 +127,11 @@ public:
     /// Construct an executor with a catalog reference.
     /// @param catalog The database catalog.
     explicit Executor(Catalog& catalog);
+
+    /// Construct an executor with a catalog reference and optional storage manager.
+    /// @param catalog     The database catalog.
+    /// @param storage_mgr Pointer to StorageManager for persistence (nullptr = no persistence).
+    Executor(Catalog& catalog, StorageManager* storage_mgr);
 
     // =========================================================================
     // DDL Execution
@@ -425,6 +433,7 @@ private:
     Schema joined_schema_;                                           ///< Combined schema for joined tables
 
     Catalog& catalog_;
+    StorageManager* storage_mgr_ = nullptr;   ///< Optional persistence layer (may be nullptr).
 };
 
 } // namespace seeddb

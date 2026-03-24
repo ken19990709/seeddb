@@ -82,6 +82,10 @@ public:
     /// @return The new PageId, or INVALID_PAGE_ID if @p file_id is not open.
     PageId allocatePage(uint32_t file_id);
 
+    /// Returns the number of pages currently allocated in the file.
+    /// @return Page count, or 0 if @p file_id is not open.
+    uint32_t pageCount(uint32_t file_id) const;
+
 private:
     // =========================================================================
     // Helpers

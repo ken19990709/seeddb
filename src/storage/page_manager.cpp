@@ -108,4 +108,8 @@ PageId PageManager::allocatePage(uint32_t file_id) {
     return disk_.allocatePage(file_id);
 }
 
+uint32_t PageManager::pageCount(uint32_t file_id) const {
+    return disk_.pageCount(file_id);
+}
+
 } // namespace seeddb
