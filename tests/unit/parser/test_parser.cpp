@@ -865,7 +865,7 @@ TEST_CASE("Parser: IN expression", "[parser][expression]") {
         auto* select = static_cast<SelectStmt*>(result.value().get());
         REQUIRE(select->hasWhere());
 
-        auto* in_expr = dynamic_cast<const InExpr*>(select->whereExpr());
+        auto* in_expr = dynamic_cast<const InExpr*>(select->whereClause());
         REQUIRE(in_expr != nullptr);
         REQUIRE_FALSE(in_expr->isNegated());
         REQUIRE(in_expr->values().size() == 3);
@@ -880,7 +880,7 @@ TEST_CASE("Parser: IN expression", "[parser][expression]") {
         REQUIRE(result.is_ok());
 
         auto* select = static_cast<SelectStmt*>(result.value().get());
-        auto* in_expr = dynamic_cast<const InExpr*>(select->whereExpr());
+        auto* in_expr = dynamic_cast<const InExpr*>(select->whereClause());
         REQUIRE(in_expr != nullptr);
         REQUIRE(in_expr->values().size() == 3);
     }
@@ -896,7 +896,7 @@ TEST_CASE("Parser: IN expression", "[parser][expression]") {
         auto* select = static_cast<SelectStmt*>(result.value().get());
         REQUIRE(select->hasWhere());
 
-        auto* in_expr = dynamic_cast<const InExpr*>(select->whereExpr());
+        auto* in_expr = dynamic_cast<const InExpr*>(select->whereClause());
         REQUIRE(in_expr != nullptr);
         REQUIRE(in_expr->isNegated());
     }
@@ -916,7 +916,7 @@ TEST_CASE("Parser: BETWEEN expression", "[parser][expression]") {
         auto* select = static_cast<SelectStmt*>(result.value().get());
         REQUIRE(select->hasWhere());
 
-        auto* between_expr = dynamic_cast<const BetweenExpr*>(select->whereExpr());
+        auto* between_expr = dynamic_cast<const BetweenExpr*>(select->whereClause());
         REQUIRE(between_expr != nullptr);
         REQUIRE_FALSE(between_expr->isNegated());
     }
@@ -932,7 +932,7 @@ TEST_CASE("Parser: BETWEEN expression", "[parser][expression]") {
         auto* select = static_cast<SelectStmt*>(result.value().get());
         REQUIRE(select->hasWhere());
 
-        auto* between_expr = dynamic_cast<const BetweenExpr*>(select->whereExpr());
+        auto* between_expr = dynamic_cast<const BetweenExpr*>(select->whereClause());
         REQUIRE(between_expr != nullptr);
         REQUIRE(between_expr->isNegated());
     }
@@ -952,7 +952,7 @@ TEST_CASE("Parser: LIKE expression", "[parser][expression]") {
         auto* select = static_cast<SelectStmt*>(result.value().get());
         REQUIRE(select->hasWhere());
 
-        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereExpr());
+        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereClause());
         REQUIRE(like_expr != nullptr);
         REQUIRE_FALSE(like_expr->isNegated());
     }
@@ -966,7 +966,7 @@ TEST_CASE("Parser: LIKE expression", "[parser][expression]") {
         REQUIRE(result.is_ok());
 
         auto* select = static_cast<SelectStmt*>(result.value().get());
-        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereExpr());
+        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereClause());
         REQUIRE(like_expr != nullptr);
     }
 
@@ -981,7 +981,7 @@ TEST_CASE("Parser: LIKE expression", "[parser][expression]") {
         auto* select = static_cast<SelectStmt*>(result.value().get());
         REQUIRE(select->hasWhere());
 
-        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereExpr());
+        auto* like_expr = dynamic_cast<const LikeExpr*>(select->whereClause());
         REQUIRE(like_expr != nullptr);
         REQUIRE(like_expr->isNegated());
     }
