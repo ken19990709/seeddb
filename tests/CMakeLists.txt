@@ -37,4 +37,10 @@ target_sources(seeddb_tests
         unit/storage/test_storage_manager.cpp
         unit/storage/test_buffer_pool.cpp
         unit/storage/test_table_iterator.cpp
+        unit/executor/test_executor_disk.cpp
+        unit/executor/test_disk_stress.cpp
+        ${CMAKE_SOURCE_DIR}/src/executor/executor.cpp
+        ${CMAKE_SOURCE_DIR}/src/executor/function.cpp
 )
+
+target_include_directories(seeddb_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
