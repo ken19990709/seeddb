@@ -11,35 +11,32 @@
 #include "storage/page_manager.h"
 #include "storage/row.h"
 #include "storage/schema.h"
-#include "storage/table.h"
 #include "storage/tid.h"
 #include "storage/table_iterator.h"
 
 namespace seeddb {
 
 // =============================================================================
-// StorageManager — bridges the SQL engine and the page-storage engine
+// StorageManager — disk-based storage engine
 // =============================================================================
 //
 // Responsibilities:
 //  • Persists table schemas to <data_dir>/catalog.meta (binary format).
-//  • Persists row data to <data_dir>/<table_name>.db (slotted pages).
-//  • On startup, loads everything back into the provided in-memory Catalog.
+//  • Persists row data to <data_dir>/<table_name>.db (slotted pages via BufferPool).
+//  • On startup, loads schemas back into Catalog. Rows are read on-demand via iterators.
 //
-// Usage in the CLI:
-//   StorageManager sm(config.data_directory());
-//   sm.load(catalog);                          // restore on startup
-//   Executor exec(catalog, &sm);               // executor calls sm after mutations
+// Usage:
+//   StorageManager sm(config.data_directory(), config);
+//   sm.load(catalog);                          // restore schemas on startup
+//   Executor exec(catalog, &sm);               // executor uses new disk API
 //
 // Persistence strategy:
 //  • CREATE TABLE  → save catalog.meta + create .db file
-//  • INSERT        → append one row to the last (or a new) slotted page
-//  • UPDATE/DELETE → full checkpoint: drop+recreate .db + re-write all rows
+//  • INSERT        → insertRow() via BufferPool
+//  • UPDATE        → updateRow() in-place via BufferPool
+//  • DELETE        → deleteRow() marks slot deleted via BufferPool
+//  • SELECT        → createIterator() scans pages via BufferPool
 //  • DROP TABLE    → delete .db file + save catalog.meta
-//
-// Backward compatibility:
-//   Executor accepts StorageManager* (nullptr = no persistence, existing tests
-//   continue to pass without modification).
 // =============================================================================
 
 class StorageManager {
@@ -48,12 +45,7 @@ public:
     // Constructor
     // =========================================================================
 
-    // New Config-based constructor
     StorageManager(const std::string& data_dir, const Config& config);
-
-    /// Compatibility constructor. Remove when executor switches to new API.
-    explicit StorageManager(const std::string& data_dir)
-        : StorageManager(data_dir, Config{}) {}
 
     // Non-copyable
     StorageManager(const StorageManager&)            = delete;
@@ -63,7 +55,7 @@ public:
     // Startup
     // =========================================================================
 
-    /// Loads all persisted tables (schemas + rows) into @p catalog.
+    /// Loads all persisted table schemas into @p catalog.
     /// Should be called once at startup before any SQL is executed.
     /// @return true on success (including the empty-database case).
     bool load(Catalog& catalog);
@@ -82,23 +74,6 @@ public:
     /// @param name Table name.
     /// @return true on success.
     bool onDropTable(const std::string& name);
-
-    /// Appends a single row to the table's page file.
-    /// Tries to fit in the last allocated page; allocates a new page if full.
-    /// @param table_name Table name.
-    /// @param row        The row to append.
-    /// @param schema     The table schema (used for serialization).
-    /// @return true on success.
-    bool appendRow(const std::string& table_name,
-                   const Row& row,
-                   const Schema& schema);
-
-    /// Rewrites all pages for a table from the current in-memory state.
-    /// Used after UPDATE or DELETE to keep disk in sync.
-    /// @param table_name Table name.
-    /// @param table      The in-memory table (all surviving rows).
-    /// @return true on success.
-    bool checkpoint(const std::string& table_name, const Table& table);
 
     // =========================================================================
     // New disk-based API
@@ -133,11 +108,6 @@ private:
     /// Deserializes schemas_ from catalog.meta.
     /// Returns true even when the file does not yet exist (empty database).
     bool loadCatalogMeta();
-
-    /// Reads all rows from a table's page file into a vector.
-    std::vector<Row> loadTableRows(const std::string& table_name,
-                                   const Schema& schema,
-                                   uint32_t file_id);
 
     /// Internal insert that takes file_id directly.
     bool insertRowInternal(uint32_t file_id, const std::vector<char>& serialized, uint16_t row_size);

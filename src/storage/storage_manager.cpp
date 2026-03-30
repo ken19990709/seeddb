@@ -132,29 +132,6 @@ bool StorageManager::loadCatalogMeta() {
     return true;
 }
 
-std::vector<Row> StorageManager::loadTableRows(const std::string& table_name,
-                                                const Schema& schema,
-                                                uint32_t file_id) {
-    (void)table_name;
-    std::vector<Row> rows;
-    const uint32_t num_pages = page_mgr_.pageCount(file_id);
-
-    for (uint32_t pn = 0; pn < num_pages; ++pn) {
-        PageId pid(file_id, pn);
-        Page page;
-        if (!page_mgr_.getPage(pid, page)) continue;
-
-        for (uint16_t slot = 0; slot < page.slotCount(); ++slot) {
-            auto [data, size] = page.getRecord(slot);
-            if (!data || size == 0) continue;  // deleted slot
-
-            rows.push_back(RowSerializer::deserialize(data, size, schema));
-        }
-    }
-
-    return rows;
-}
-
 // =============================================================================
 // Startup
 // =============================================================================
@@ -164,17 +141,11 @@ bool StorageManager::load(Catalog& catalog) {
 
     for (const auto& [name, schema] : schemas_) {
         uint32_t fid = page_mgr_.openTableFile(name);
-        if (fid == INVALID_FILE_ID) continue;  // data file missing — skip silently
+        if (fid == INVALID_FILE_ID) continue;
 
         file_ids_[name] = fid;
-
-        std::vector<Row> rows = loadTableRows(name, schema, fid);
-
         catalog.createTable(name, schema);
-        Table* table = catalog.getTable(name);
-        for (auto& row : rows) {
-            table->insert(std::move(row));
-        }
+        // No row loading — rows are read on-demand via createIterator()
     }
 
     return true;
@@ -207,62 +178,6 @@ bool StorageManager::onDropTable(const std::string& name) {
     file_ids_.erase(name);
     page_mgr_.dropTableFile(name);
     return saveCatalogMeta();
-}
-
-bool StorageManager::appendRow(const std::string& table_name,
-                               const Row& row,
-                               const Schema& schema) {
-    auto it = file_ids_.find(table_name);
-    if (it == file_ids_.end()) return false;
-    const uint32_t file_id = it->second;
-
-    const auto serialized = RowSerializer::serialize(row, schema);
-    const auto row_size = static_cast<uint16_t>(serialized.size());
-
-    // Try to fit into the last existing page
-    const uint32_t num_pages = page_mgr_.pageCount(file_id);
-    if (num_pages > 0) {
-        PageId last_pid(file_id, num_pages - 1);
-        Page page;
-        if (page_mgr_.getPage(last_pid, page)) {
-            if (page.freeSpace() >= row_size + Page::SLOT_SIZE) {
-                if (page.insertRecord(serialized.data(), row_size).has_value()) {
-                    return page_mgr_.writePage(last_pid, page);
-                }
-            }
-        }
-    }
-
-    // Allocate a fresh page
-    PageId new_pid = page_mgr_.allocatePage(file_id);
-    if (!new_pid.isValid()) return false;
-
-    Page new_page(new_pid, PageType::DATA_PAGE);
-    if (!new_page.insertRecord(serialized.data(), row_size).has_value()) {
-        return false;  // row larger than a single page — not supported
-    }
-    return page_mgr_.writePage(new_pid, new_page);
-}
-
-bool StorageManager::checkpoint(const std::string& table_name, const Table& table) {
-    // Drop and recreate the file so stale pages are removed
-    page_mgr_.dropTableFile(table_name);
-
-    uint32_t fid;
-    try {
-        fid = page_mgr_.createTableFile(table_name);
-    } catch (const std::exception&) {
-        return false;
-    }
-    if (fid == INVALID_FILE_ID) return false;
-    file_ids_[table_name] = fid;
-
-    const Schema& schema = table.schema();
-    for (size_t i = 0; i < table.rowCount(); ++i) {
-        if (!appendRow(table_name, table.get(i), schema)) return false;
-    }
-
-    return true;
 }
 
 // =============================================================================
