@@ -90,7 +90,7 @@ struct StressFixture {
 int StressFixture::counter_ = 0;
 
 // =============================================================================
-// Integration Milestone — Section 8.3
+// Integration stress tests
 // =============================================================================
 
 TEST_CASE("Stress: insert 10,000 rows with 10-frame buffer pool",

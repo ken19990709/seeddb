@@ -26,14 +26,18 @@ struct TempDir {
 
     TempDir() {
         path = fs::temp_directory_path().string() + "/seeddb_sm_test_" +
-               std::to_string(reinterpret_cast<uintptr_t>(this));
+               std::to_string(++counter_);
         fs::create_directories(path);
     }
 
     ~TempDir() {
         fs::remove_all(path);
     }
+
+    static int counter_;
 };
+
+int TempDir::counter_ = 0;
 
 struct TempDirCfg {
     std::string path;
@@ -41,7 +45,7 @@ struct TempDirCfg {
 
     TempDirCfg() {
         path = fs::temp_directory_path().string() + "/seeddb_sm_new_" +
-               std::to_string(reinterpret_cast<uintptr_t>(this));
+               std::to_string(++counter_);
         fs::create_directories(path);
         config.set("buffer_pool_size", "10");
     }
@@ -49,7 +53,11 @@ struct TempDirCfg {
     ~TempDirCfg() {
         fs::remove_all(path);
     }
+
+    static int counter_;
 };
+
+int TempDirCfg::counter_ = 0;
 
 // ---------------------------------------------------------------------------
 // Helper – build a simple two-column schema: id INTEGER, name VARCHAR
@@ -292,7 +300,9 @@ TEST_CASE("StorageManager - createIterator returns nullptr for missing table", "
 }
 
 // =============================================================================
-// Section 7 — Error handling tests
+// =============================================================================
+// Error handling tests
+// =============================================================================
 // =============================================================================
 
 TEST_CASE("StorageManager - deleteRow with invalid TID returns false",
@@ -359,7 +369,7 @@ TEST_CASE("StorageManager - operations on dropped table fail",
 }
 
 TEST_CASE("StorageManager - sequential insert-update-delete cycle",
-          "[storage_manager][error]") {
+          "[storage_manager][integration]") {
     TempDirCfg td;
     Schema schema = makeSchema();
 
@@ -422,7 +432,7 @@ TEST_CASE("StorageManager - sequential insert-update-delete cycle",
 }
 
 TEST_CASE("StorageManager - multi-page insert and full scan verification",
-          "[storage_manager][error]") {
+          "[storage_manager][integration]") {
     TempDirCfg td;
 
     // Schema with a single VARCHAR column — each row ~200 bytes, ~18 rows/page

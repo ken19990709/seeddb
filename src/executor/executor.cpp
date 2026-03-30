@@ -187,7 +187,6 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
         );
     }
 
-    // Insert the row into the table via storage manager
     if (!storage_mgr_) {
         return ExecutionResult::error(
             ErrorCode::INTERNAL_ERROR,
@@ -225,7 +224,7 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
     const Schema& schema = catalog_.getTable(table_name)->schema();
     const parser::Expr* where_clause = stmt.whereClause();
 
-    // Pass 1: Collect (TID, new_row) pairs for matching rows
+    // Two-pass to avoid iterator invalidation from page migration
     std::vector<std::pair<TID, Row>> updates;
     auto iter = storage_mgr_->createIterator(table_name);
     if (!iter) {
@@ -275,7 +274,7 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
         }
     }
 
-    // Pass 2: Apply updates
+    // Apply collected updates
     for (auto& [tid, new_row] : updates) {
         if (!storage_mgr_->updateRow(tid, new_row, schema)) {
             return ExecutionResult::error(
@@ -308,7 +307,7 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
     const Schema& schema = catalog_.getTable(table_name)->schema();
     const parser::Expr* where_clause = stmt.whereClause();
 
-    // Pass 1: Collect TIDs of matching rows
+    // Two-pass to avoid iterator invalidation
     std::vector<TID> tids_to_delete;
     auto iter = storage_mgr_->createIterator(table_name);
     if (!iter) {
@@ -324,7 +323,7 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
         }
     }
 
-    // Pass 2: Apply deletes
+    // Apply collected deletes
     for (const TID& tid : tids_to_delete) {
         if (!storage_mgr_->deleteRow(tid)) {
             return ExecutionResult::error(
@@ -391,8 +390,9 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
 
     // Check if this is an aggregate query
     if (hasAggregates(stmt) || stmt.hasGroupBy()) {
-        // Process aggregate query
-        processAggregateQuery(stmt, table_name, schema);
+        if (!processAggregateQuery(stmt, table_name, schema)) {
+            return false;
+        }
 
         // Build alias map and result schema for aggregate results
         std::unordered_map<std::string, std::string> alias_map;
@@ -628,14 +628,10 @@ Value Executor::evaluateExpr(const parser::Expr* expr, const Row& row, const Sch
             const auto* col_ref = static_cast<const parser::ColumnRef*>(expr);
             const std::string& col_name = col_ref->column();
 
-            // Find column index in schema
-            for (size_t i = 0; i < schema.columnCount(); ++i) {
-                if (schema.column(i).name() == col_name) {
-                    return row.get(i);
-                }
+            auto col_idx = schema.columnIndex(col_name);
+            if (col_idx.has_value()) {
+                return row.get(col_idx.value());
             }
-
-            // Column not found
             return Value::null();
         }
 
@@ -1537,35 +1533,26 @@ void Executor::collectAggregatesFromExpr(const parser::Expr* expr,
     }
 }
 
-void Executor::processAggregateQuery(const parser::SelectStmt& stmt,
+bool Executor::processAggregateQuery(const parser::SelectStmt& stmt,
                                       const std::string& table_name,
                                       const Schema& schema) {
-    // Validate aggregate query constraints first
     auto validation = validateAggregateQuery(stmt, schema);
     if (validation.status() == ExecutionResult::Status::ERROR) {
         result_rows_.clear();
-        throw std::runtime_error(validation.errorMessage());
+        return false;
     }
 
-    // Collect all aggregates to determine order
     auto aggregates = collectAggregates(stmt);
-
-    // Create template aggregate state
     auto template_state = createAggregateState(stmt);
 
-    // Map from group key to aggregate state
     std::unordered_map<GroupKey, std::unique_ptr<AggregateState>, GroupKeyHash, GroupKeyEqual> groups;
-
-    // Handle case with no GROUP BY (single implicit group)
     bool has_group_by = stmt.hasGroupBy();
-
-    // Process all matching rows via iterator
     const parser::Expr* where_clause = stmt.whereClause();
 
     auto iter = storage_mgr_->createIterator(table_name);
     if (!iter) {
         result_rows_.clear();
-        throw std::runtime_error("Failed to create iterator for table '" + table_name + "'");
+        return false;
     }
 
     while (iter->next()) {
@@ -1635,6 +1622,7 @@ void Executor::processAggregateQuery(const parser::SelectStmt& stmt,
         }
         result_rows_.push_back(Row(std::move(row_values)));
     }
+    return true;
 }
 
 Value Executor::evaluateExprWithAggregates(const parser::Expr* expr,
@@ -1788,12 +1776,12 @@ ExecutionResult Executor::validateAggregateQuery(const parser::SelectStmt& stmt,
     }
 
     // If we have aggregates or GROUP BY, validate GROUP BY constraints
-    // (unused variable removed)
+    bool has_aggs = !aggregates.empty();
 
     // Validate SELECT list: non-aggregate columns must be in GROUP BY
     for (const auto& col : stmt.columns()) {
         std::string error_msg;
-        if (!validateExprGroupByConstraint(col.expr.get(), stmt, error_msg)) {
+        if (!validateExprGroupByConstraint(col.expr.get(), stmt, has_aggs, error_msg)) {
             return ExecutionResult::error(ErrorCode::SYNTAX_ERROR, error_msg);
         }
     }
@@ -1801,8 +1789,8 @@ ExecutionResult Executor::validateAggregateQuery(const parser::SelectStmt& stmt,
     // Validate HAVING clause if present
     if (stmt.hasHaving()) {
         std::string error_msg;
-        if (!validateExprGroupByConstraint(stmt.havingClause(), stmt, error_msg)) {
-            return ExecutionResult::error(ErrorCode::SYNTAX_ERROR, 
+        if (!validateExprGroupByConstraint(stmt.havingClause(), stmt, has_aggs, error_msg)) {
+            return ExecutionResult::error(ErrorCode::SYNTAX_ERROR,
                                           "HAVING clause: " + error_msg);
         }
     }
@@ -1811,8 +1799,8 @@ ExecutionResult Executor::validateAggregateQuery(const parser::SelectStmt& stmt,
     if (stmt.hasOrderBy()) {
         for (const auto& order_expr : stmt.orderBy()) {
             std::string error_msg;
-            if (!validateExprGroupByConstraint(order_expr.expr.get(), stmt, error_msg)) {
-                return ExecutionResult::error(ErrorCode::SYNTAX_ERROR, 
+            if (!validateExprGroupByConstraint(order_expr.expr.get(), stmt, has_aggs, error_msg)) {
+                return ExecutionResult::error(ErrorCode::SYNTAX_ERROR,
                                               "ORDER BY clause: " + error_msg);
             }
         }
@@ -1840,27 +1828,22 @@ bool Executor::isColumnInGroupBy(const std::string& col_name,
 
 bool Executor::validateExprGroupByConstraint(const parser::Expr* expr,
                                               const parser::SelectStmt& stmt,
+                                              bool has_aggregates,
                                               std::string& error_msg) const {
     if (!expr) return true;
 
-    // Check if we have any aggregates in the query
-    auto aggregates = collectAggregates(stmt);
-    bool has_aggregates = !aggregates.empty();
     bool has_group_by = stmt.hasGroupBy();
 
-    // If no aggregates and no GROUP BY, no constraint to enforce
     if (!has_aggregates && !has_group_by) {
         return true;
     }
 
     switch (expr->type()) {
         case parser::NodeType::EXPR_AGGREGATE:
-            // Aggregate expressions are always valid in aggregate context
             return true;
 
         case parser::NodeType::EXPR_COLUMN_REF: {
             const auto* col = static_cast<const parser::ColumnRef*>(expr);
-            // Column must be in GROUP BY when we have aggregates
             if (has_aggregates || has_group_by) {
                 if (!isColumnInGroupBy(col->column(), stmt)) {
                     error_msg = "column '" + col->column() +
@@ -1873,19 +1856,18 @@ bool Executor::validateExprGroupByConstraint(const parser::Expr* expr,
 
         case parser::NodeType::EXPR_BINARY: {
             const auto* bin = static_cast<const parser::BinaryExpr*>(expr);
-            if (!validateExprGroupByConstraint(bin->left(), stmt, error_msg)) {
+            if (!validateExprGroupByConstraint(bin->left(), stmt, has_aggregates, error_msg)) {
                 return false;
             }
-            return validateExprGroupByConstraint(bin->right(), stmt, error_msg);
+            return validateExprGroupByConstraint(bin->right(), stmt, has_aggregates, error_msg);
         }
 
         case parser::NodeType::EXPR_UNARY: {
             const auto* unary = static_cast<const parser::UnaryExpr*>(expr);
-            return validateExprGroupByConstraint(unary->operand(), stmt, error_msg);
+            return validateExprGroupByConstraint(unary->operand(), stmt, has_aggregates, error_msg);
         }
 
         case parser::NodeType::EXPR_LITERAL:
-            // Literals are always valid
             return true;
 
         default:

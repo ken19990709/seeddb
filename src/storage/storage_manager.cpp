@@ -242,10 +242,9 @@ bool StorageManager::updateRow(TID tid, const Row& new_row, const Schema& schema
     Page* page = buffer_pool_.FetchPage(pid);
     if (!page) return false;
 
-    // Delete old slot
+    // Try same-page update: delete old slot and fit new data
     page->deleteRecord(tid.slot_id);
 
-    // Try to fit updated data on the same page
     if (page->freeSpace() >= row_size + Page::SLOT_SIZE) {
         auto slot = page->insertRecord(serialized.data(), row_size);
         if (slot.has_value()) {
@@ -254,7 +253,10 @@ bool StorageManager::updateRow(TID tid, const Row& new_row, const Schema& schema
         }
     }
 
-    // Doesn't fit — mark page dirty (delete applied) and insert elsewhere
+    // Doesn't fit on same page — unpin dirty (old slot deleted),
+    // then insert new row on another page.
+    // NOTE: if insertRowInternal fails, old data is already deleted.
+    // True atomicity requires WAL (planned for future phase).
     buffer_pool_.UnpinPage(pid, true);
     return insertRowInternal(tid.file_id, serialized, row_size);
 }

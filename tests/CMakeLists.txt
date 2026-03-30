@@ -44,3 +44,22 @@ target_sources(seeddb_tests
 )
 
 target_include_directories(seeddb_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# =============================================================================
+# Benchmark executable
+# =============================================================================
+add_executable(seeddb_bench bench/bench_perf.cpp)
+target_link_libraries(seeddb_bench
+    PRIVATE
+        seeddb_common
+        seeddb_parser
+        seeddb_storage
+        seeddb_buffer
+)
+target_include_directories(seeddb_bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# Compile executor sources directly (library is disabled in src/)
+target_sources(seeddb_bench
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/executor/executor.cpp
+        ${CMAKE_SOURCE_DIR}/src/executor/function.cpp
+)

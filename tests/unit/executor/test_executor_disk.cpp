@@ -88,7 +88,7 @@ struct ExecutorDiskFixture {
 int ExecutorDiskFixture::counter_ = 0;
 
 // =============================================================================
-// Section 7 — Executor error propagation tests
+// Executor error propagation tests
 // =============================================================================
 
 TEST_CASE("Executor: INSERT oversized row returns error", "[executor][error]") {

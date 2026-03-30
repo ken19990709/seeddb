@@ -344,7 +344,8 @@ private:
     /// Process aggregate query and populate result_rows_.
     /// @param stmt The SELECT statement.
     /// @param schema The source table schema.
-    void processAggregateQuery(const parser::SelectStmt& stmt,
+    /// @return true on success, false on error (result_rows_ cleared).
+    bool processAggregateQuery(const parser::SelectStmt& stmt,
                                const std::string& table_name,
                                const Schema& schema);
 
@@ -383,10 +384,12 @@ private:
     /// Validate that non-aggregate expressions only use GROUP BY columns.
     /// @param expr The expression to validate.
     /// @param stmt The SELECT statement.
+    /// @param has_aggregates Whether the query contains aggregates (pre-computed).
     /// @param error_msg Output error message if validation fails.
     /// @return true if valid, false otherwise.
     bool validateExprGroupByConstraint(const parser::Expr* expr,
                                        const parser::SelectStmt& stmt,
+                                       bool has_aggregates,
                                        std::string& error_msg) const;
 
     /// Validate aggregate function type constraints (e.g., SUM/AVG require numeric).

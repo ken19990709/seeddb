@@ -72,7 +72,7 @@ struct IterFixture {
         : schema(makeIterSchema())
     {
         dir = fs::temp_directory_path().string() + "/seeddb_iter_" +
-              std::to_string(reinterpret_cast<uintptr_t>(this));
+              std::to_string(++counter_);
         fs::create_directories(dir);
         page_mgr = std::make_unique<seeddb::PageManager>(dir);
         pool = std::make_unique<seeddb::BufferPool>(*page_mgr, seeddb::Config{});
@@ -97,7 +97,11 @@ struct IterFixture {
         page_mgr->writePage(pid, page);
         return pid.pageNum();
     }
+
+    static int counter_;
 };
+
+int IterFixture::counter_ = 0;
 
 TEST_CASE("HeapTableIterator - empty table returns no rows", "[table_iterator]") {
     IterFixture fix;
@@ -229,7 +233,7 @@ TEST_CASE("HeapTableIterator - TID tracking across pages", "[table_iterator]") {
 }
 
 // =============================================================================
-// Edge case tests — Section 7 robustness
+// Edge case tests — robustness
 // =============================================================================
 
 TEST_CASE("HeapTableIterator - all slots deleted returns no rows",
