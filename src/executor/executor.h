@@ -63,9 +63,12 @@ public:
     }
 
     /// Create an empty result (no rows).
+    /// @param affected_rows Number of rows affected by DML (default 0).
     /// @return ExecutionResult with EMPTY status.
-    static ExecutionResult empty() {
-        return ExecutionResult();
+    static ExecutionResult empty(size_t affected_rows = 0) {
+        ExecutionResult r;
+        r.affected_rows_ = affected_rows;
+        return r;
     }
 
     // =========================================================================
@@ -93,6 +96,10 @@ public:
     /// @return Const reference to the error message.
     const std::string& errorMessage() const { return error_message_; }
 
+    /// Get the number of rows affected by DML (INSERT/UPDATE/DELETE).
+    /// @return Number of affected rows.
+    size_t affectedRows() const { return affected_rows_; }
+
 private:
     // Private constructor for OK status
     ExecutionResult(Status status, Row row)
@@ -110,6 +117,7 @@ private:
     Row row_;
     ErrorCode error_code_ = ErrorCode::SUCCESS;
     std::string error_message_;
+    size_t affected_rows_ = 0;
 };
 
 // =============================================================================
@@ -426,15 +434,28 @@ private:
     /// @return A descriptive column name (e.g., "COUNT(*)", "SUM(amount)").
     std::string generateAggregateName(const parser::AggregateExpr* agg) const;
 
+    /// Convert a numeric Value to double for arithmetic/comparison.
+    static double to_double(const Value& v);
+
+    /// Remove duplicate rows from result_rows_ if DISTINCT is specified.
+    void applyDistinct(const parser::SelectStmt& stmt);
+
+    /// Apply LIMIT/OFFSET to result_rows_ if specified in the statement.
+    void applyLimitOffset(const parser::SelectStmt& stmt);
+
     // Query state for SELECT iteration
     std::vector<Row> result_rows_;             ///< Result rows (projected, distinct, sorted).
     size_t current_row_index_ = 0;             ///< Current position in result_rows_.
     
     // JOIN state
-    std::unordered_map<std::string, const Schema*> table_schemas_;  ///< Map of table names to schemas
-    std::unordered_map<std::string, std::string> table_aliases_;     ///< Map of aliases to table names
-    std::vector<Row> joined_rows_;                                   ///< Rows after JOIN operations
-    Schema joined_schema_;                                           ///< Combined schema for joined tables
+    /// Map of table names to schemas for JOIN queries.
+    std::unordered_map<std::string, const Schema*> table_schemas_;
+    /// Map of aliases to table names for JOIN queries.
+    std::unordered_map<std::string, std::string> table_aliases_;
+    /// Rows after JOIN operations.
+    std::vector<Row> joined_rows_;
+    /// Combined schema for joined tables.
+    Schema joined_schema_;
 
     Catalog& catalog_;
     StorageManager* storage_mgr_ = nullptr;   ///< Optional persistence layer (may be nullptr).

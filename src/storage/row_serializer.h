@@ -130,6 +130,7 @@ public:
         values.reserve(schema.columnCount());
 
         for (size_t i = 0; i < schema.columnCount(); ++i) {
+            // Check bounds for null flag
             if (ptr >= end) {
                 values.push_back(Value::null());
                 continue;
@@ -143,38 +144,75 @@ public:
 
             switch (schema.column(i).type().id()) {
                 case LogicalTypeId::INTEGER: {
+                    if (ptr + 4 > end) {
+                        values.push_back(Value::null());
+                        ptr = end;  // Skip remaining
+                        continue;
+                    }
                     int32_t v = 0;
                     std::memcpy(&v, ptr, 4); ptr += 4;
                     values.push_back(Value::integer(v));
                     break;
                 }
                 case LogicalTypeId::BIGINT: {
+                    if (ptr + 8 > end) {
+                        values.push_back(Value::null());
+                        ptr = end;
+                        continue;
+                    }
                     int64_t v = 0;
                     std::memcpy(&v, ptr, 8); ptr += 8;
                     values.push_back(Value::bigint(v));
                     break;
                 }
                 case LogicalTypeId::FLOAT: {
+                    if (ptr + 4 > end) {
+                        values.push_back(Value::null());
+                        ptr = end;
+                        continue;
+                    }
                     float v = 0.0f;
                     std::memcpy(&v, ptr, 4); ptr += 4;
                     values.push_back(Value::Float(v));
                     break;
                 }
                 case LogicalTypeId::DOUBLE: {
+                    if (ptr + 8 > end) {
+                        values.push_back(Value::null());
+                        ptr = end;
+                        continue;
+                    }
                     double v = 0.0;
                     std::memcpy(&v, ptr, 8); ptr += 8;
                     values.push_back(Value::Double(v));
                     break;
                 }
                 case LogicalTypeId::BOOLEAN: {
+                    if (ptr + 1 > end) {
+                        values.push_back(Value::null());
+                        ptr = end;
+                        continue;
+                    }
                     uint8_t v = 0;
                     std::memcpy(&v, ptr, 1); ptr += 1;
                     values.push_back(Value::boolean(v != 0));
                     break;
                 }
                 case LogicalTypeId::VARCHAR: {
+                    // Check bounds for length field
+                    if (ptr + 4 > end) {
+                        values.push_back(Value::null());
+                        ptr = end;
+                        continue;
+                    }
                     uint32_t len = 0;
                     std::memcpy(&len, ptr, 4); ptr += 4;
+                    // Validate length doesn't exceed remaining buffer
+                    if (len > static_cast<size_t>(end - ptr)) {
+                        values.push_back(Value::null());
+                        ptr = end;
+                        continue;
+                    }
                     std::string s(ptr, len); ptr += len;
                     values.push_back(Value::varchar(std::move(s)));
                     break;

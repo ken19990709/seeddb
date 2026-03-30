@@ -259,14 +259,9 @@ bool StorageManager::insertRowInternal(uint32_t file_id,
         }
     }
 
-    // Allocate a fresh page, write empty to disk, then fetch through BufferPool
-    PageId new_pid = page_mgr_.allocatePage(file_id);
-    if (!new_pid.isValid()) return false;
-
-    Page empty_page(new_pid, PageType::DATA_PAGE);
-    if (!page_mgr_.writePage(new_pid, empty_page)) return false;
-
-    Page* page = buffer_pool_.FetchPage(new_pid);
+    // Allocate a fresh page through BufferPool to maintain cache consistency
+    PageId new_pid;
+    Page* page = buffer_pool_.NewPage(file_id, &new_pid);
     if (!page) return false;
 
     auto slot = page->insertRecord(serialized.data(), row_size);
@@ -285,12 +280,20 @@ bool StorageManager::insertRow(const std::string& table_name,
     if (it == file_ids_.end()) return false;
 
     auto serialized = RowSerializer::serialize(row, schema);
+    // Check for truncation before casting to uint16_t
+    if (serialized.size() > UINT16_MAX) {
+        return false;  // Row too large for single page storage
+    }
     auto row_size = static_cast<uint16_t>(serialized.size());
     return insertRowInternal(it->second, serialized, row_size);
 }
 
 bool StorageManager::updateRow(TID tid, const Row& new_row, const Schema& schema) {
     auto serialized = RowSerializer::serialize(new_row, schema);
+    // Check for truncation before casting to uint16_t
+    if (serialized.size() > UINT16_MAX) {
+        return false;  // Row too large for single page storage
+    }
     auto row_size = static_cast<uint16_t>(serialized.size());
 
     PageId pid(tid.file_id, tid.page_num);

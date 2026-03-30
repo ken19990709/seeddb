@@ -252,7 +252,7 @@ TEST_CASE("StorageManager - updateRow modifies row", "[storage_manager]") {
         auto iter = sm.createIterator("upd");
         REQUIRE(iter->next());
         TID tid = iter->currentTID();
-        REQUIRE(tid.isValid());
+        REQUIRE(tid.is_valid());
 
         // Update
         REQUIRE(sm.updateRow(tid, makeRow(1, "new"), schema));

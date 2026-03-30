@@ -73,6 +73,31 @@ Page* BufferPool::FetchPage(PageId page_id) {
     return &frames_[fid].page;
 }
 
+Page* BufferPool::NewPage(uint32_t file_id, PageId* out_page_id) {
+    std::unique_lock<std::mutex> guard(latch_);
+
+    // Allocate a new page via PageManager
+    PageId page_id = page_manager_.allocatePage(file_id);
+    if (!page_id.is_valid()) return nullptr;
+
+    // Find a victim frame
+    frame_id_t fid = findVictim();
+    if (fid == INVALID_FRAME_ID) return nullptr;
+
+    // Initialize the frame with an empty page
+    frames_[fid].page = Page(page_id, PageType::DATA_PAGE);
+    frames_[fid].page_id  = page_id;
+    frames_[fid].state    = FrameState::Ready;
+    frames_[fid].pin_count.store(1, std::memory_order_relaxed);
+    frames_[fid].is_dirty.store(true, std::memory_order_relaxed);  // New page needs write
+    replacer_.Pin(fid);
+
+    page_table_[page_id] = fid;
+
+    if (out_page_id) *out_page_id = page_id;
+    return &frames_[fid].page;
+}
+
 bool BufferPool::UnpinPage(PageId page_id, bool is_dirty) {
     std::unique_lock<std::mutex> guard(latch_);
 

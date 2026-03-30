@@ -17,7 +17,7 @@ struct TID {
     uint16_t slot_id{0};                 ///< Slot index within page
 
     /// Returns true if this TID points to a valid location.
-    bool isValid() const { return file_id != INVALID_FILE_ID; }
+    bool is_valid() const { return file_id != INVALID_FILE_ID && page_num != INVALID_PAGE_NUM; }
 };
 
 }  // namespace seeddb

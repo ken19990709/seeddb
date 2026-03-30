@@ -80,7 +80,7 @@ uint32_t DiskManager::pageCount(uint32_t file_id) const {
 // =============================================================================
 
 bool DiskManager::readPage(PageId page_id, char* buffer) {
-    if (!page_id.isValid()) return false;
+    if (!page_id.is_valid()) return false;
 
     auto it = files_.find(page_id.fileId());
     if (it == files_.end() || !it->second.fp) return false;
@@ -97,7 +97,7 @@ bool DiskManager::readPage(PageId page_id, char* buffer) {
 }
 
 bool DiskManager::writePage(PageId page_id, const char* buffer) {
-    if (!page_id.isValid()) return false;
+    if (!page_id.is_valid()) return false;
 
     auto it = files_.find(page_id.fileId());
     if (it == files_.end() || !it->second.fp) return false;
@@ -150,7 +150,7 @@ PageId DiskManager::allocatePage(uint32_t file_id) {
 }
 
 void DiskManager::deallocatePage(PageId page_id) {
-    if (!page_id.isValid()) return;
+    if (!page_id.is_valid()) return;
     auto it = files_.find(page_id.fileId());
     if (it == files_.end()) return;
     it->second.free_list.push_back(page_id.pageNum());

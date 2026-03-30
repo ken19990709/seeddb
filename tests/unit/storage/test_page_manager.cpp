@@ -86,7 +86,7 @@ TEST_CASE("PageManager - allocate first page", "[page_manager]") {
     uint32_t fid = pm.createTableFile("t1");
 
     PageId pid = pm.allocatePage(fid);
-    REQUIRE(pid.isValid());
+    REQUIRE(pid.is_valid());
     REQUIRE(pid.fileId() == fid);
     REQUIRE(pid.pageNum() == 0);
 }

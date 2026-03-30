@@ -10,12 +10,12 @@
 
 TEST_CASE("PageHeader default constructs with zero values", "[storage][page_header]") {
     seeddb::PageHeader hdr;
-    REQUIRE(!hdr.page_id.isValid());
+    REQUIRE(!hdr.page_id.is_valid());
     REQUIRE(hdr.free_space_offset == 0);
     REQUIRE(hdr.slot_count == 0);
     REQUIRE(hdr.lsn == 0);
-    REQUIRE(!hdr.prev_page.isValid());
-    REQUIRE(!hdr.next_page.isValid());
+    REQUIRE(!hdr.prev_page.is_valid());
+    REQUIRE(!hdr.next_page.is_valid());
 }
 
 TEST_CASE("PageHeader size is exactly HEADER_SIZE bytes", "[storage][page_header]") {
@@ -93,6 +93,6 @@ TEST_CASE("PageHeader prev_page and next_page invalid by default", "[storage][pa
     seeddb::PageHeader restored;
     restored.deserialize(buf.data());
 
-    REQUIRE(!restored.prev_page.isValid());
-    REQUIRE(!restored.next_page.isValid());
+    REQUIRE(!restored.prev_page.is_valid());
+    REQUIRE(!restored.next_page.is_valid());
 }

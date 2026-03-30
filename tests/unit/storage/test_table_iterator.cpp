@@ -21,7 +21,7 @@ using namespace seeddb;
 
 TEST_CASE("TID - default construction is invalid", "[tid]") {
     TID tid;
-    REQUIRE_FALSE(tid.isValid());
+    REQUIRE_FALSE(tid.is_valid());
     REQUIRE(tid.file_id == INVALID_FILE_ID);
     REQUIRE(tid.page_num == INVALID_PAGE_NUM);
     REQUIRE(tid.slot_id == 0);
@@ -29,7 +29,7 @@ TEST_CASE("TID - default construction is invalid", "[tid]") {
 
 TEST_CASE("TID - construction with valid values", "[tid]") {
     TID tid{1, 5, 3};
-    REQUIRE(tid.isValid());
+    REQUIRE(tid.is_valid());
     REQUIRE(tid.file_id == 1);
     REQUIRE(tid.page_num == 5);
     REQUIRE(tid.slot_id == 3);
@@ -37,10 +37,10 @@ TEST_CASE("TID - construction with valid values", "[tid]") {
 
 TEST_CASE("TID - validity depends on file_id", "[tid]") {
     TID valid{42, 0, 0};
-    REQUIRE(valid.isValid());
+    REQUIRE(valid.is_valid());
 
     TID invalid{INVALID_FILE_ID, 100, 5};
-    REQUIRE_FALSE(invalid.isValid());
+    REQUIRE_FALSE(invalid.is_valid());
 }
 
 namespace fs = std::filesystem;
@@ -356,5 +356,5 @@ TEST_CASE("HeapTableIterator - currentTID before next returns invalid TID",
 
     auto iter = seeddb::HeapTableIterator(fix.file_id, 1, *fix.pool, fix.schema);
     TID tid = iter.currentTID();
-    REQUIRE_FALSE(tid.isValid());
+    REQUIRE_FALSE(tid.is_valid());
 }

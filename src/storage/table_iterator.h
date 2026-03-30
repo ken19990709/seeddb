@@ -6,13 +6,13 @@
 
 #include "storage/page_id.h"
 #include "storage/row.h"
+#include "storage/schema.h"
 #include "storage/tid.h"
 
 namespace seeddb {
 
 class BufferPool;
 class Page;
-class Schema;
 
 // =============================================================================
 // TableIterator — Volcano-style row iterator interface
@@ -40,15 +40,17 @@ public:
     /// @param file_id     Table file identifier.
     /// @param total_pages Cached page count (snapshot at construction time).
     /// @param buffer_pool Reference to the BufferPool for page access.
-    /// @param schema      Schema for row deserialization (must outlive iterator).
+    /// @param schema      Schema for row deserialization (copied for safety).
     HeapTableIterator(uint32_t file_id, uint32_t total_pages,
                       BufferPool& buffer_pool, const Schema& schema);
 
     ~HeapTableIterator() override;
 
-    // Non-copyable
+    // Non-copyable, non-movable
     HeapTableIterator(const HeapTableIterator&) = delete;
     HeapTableIterator& operator=(const HeapTableIterator&) = delete;
+    HeapTableIterator(HeapTableIterator&&) = delete;
+    HeapTableIterator& operator=(HeapTableIterator&&) = delete;
 
     bool next() override;
     const Row& currentRow() const override;
@@ -58,7 +60,7 @@ private:
     uint32_t file_id_;
     uint32_t total_pages_;
     BufferPool& buffer_pool_;
-    const Schema& schema_;
+    Schema schema_;  // Owned copy to prevent dangling reference
 
     // Current pinned page (INVALID if none pinned)
     PageId pinned_page_id_;

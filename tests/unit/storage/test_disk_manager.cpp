@@ -63,7 +63,7 @@ TEST_CASE("DiskManager - allocate pages sequentially", "[disk_manager]") {
     REQUIRE(dm.openFile(1, tf.path));
 
     PageId p0 = dm.allocatePage(1);
-    REQUIRE(p0.isValid());
+    REQUIRE(p0.is_valid());
     REQUIRE(p0.fileId() == 1);
     REQUIRE(p0.pageNum() == 0);
     REQUIRE(dm.pageCount(1) == 1);
@@ -83,7 +83,7 @@ TEST_CASE("DiskManager - write and read round-trip", "[disk_manager]") {
     REQUIRE(dm.openFile(2, tf.path));
 
     PageId pid = dm.allocatePage(2);
-    REQUIRE(pid.isValid());
+    REQUIRE(pid.is_valid());
 
     // Prepare write buffer with recognisable pattern
     char write_buf[PAGE_SIZE];

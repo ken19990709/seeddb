@@ -17,14 +17,14 @@ bool pageIdsEqual(const seeddb::PageId& a, const seeddb::PageId& b) {
 
 TEST_CASE("PageId default constructs to invalid", "[storage][page_id]") {
     seeddb::PageId page_id;
-    REQUIRE(!page_id.isValid());
+    REQUIRE(!page_id.is_valid());
 }
 
 TEST_CASE("PageId constructs with file_id and page_num", "[storage][page_id]") {
     seeddb::PageId page_id(1, 42);
     REQUIRE(page_id.fileId() == 1);
     REQUIRE(page_id.pageNum() == 42);
-    REQUIRE(page_id.isValid());
+    REQUIRE(page_id.is_valid());
 }
 
 TEST_CASE("PageId equality comparison", "[storage][page_id]") {
@@ -94,7 +94,7 @@ TEST_CASE("PageId toString", "[storage][page_id]") {
 }
 
 TEST_CASE("PageId INVALID_PAGE_ID constant", "[storage][page_id]") {
-    REQUIRE(!seeddb::INVALID_PAGE_ID.isValid());
+    REQUIRE(!seeddb::INVALID_PAGE_ID.is_valid());
 }
 
 TEST_CASE("PageId offset calculation", "[storage][page_id]") {

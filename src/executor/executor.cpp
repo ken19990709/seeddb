@@ -1,13 +1,13 @@
 #include "executor/executor.h"
+
+#include "common/value.h"
 #include "executor/function.h"
+#include "storage/schema.h"
 #include "storage/storage_manager.h"
 #include "storage/table_iterator.h"
 #include "storage/tid.h"
 
 #include <algorithm>
-
-#include "common/value.h"
-#include "storage/schema.h"
 
 namespace seeddb {
 
@@ -59,7 +59,14 @@ ExecutionResult Executor::execute(const parser::CreateTableStmt& stmt) {
 
     // Persist to disk if storage is available
     if (storage_mgr_) {
-        if (!storage_mgr_->onCreateTable(table_name, catalog_.getTable(table_name)->schema())) {
+        const Table* table = catalog_.getTable(table_name);
+        if (!table) {
+            return ExecutionResult::error(
+                ErrorCode::INTERNAL_ERROR,
+                "Internal error: table not found after creation"
+            );
+        }
+        if (!storage_mgr_->onCreateTable(table_name, table->schema())) {
             // Disk creation failed - rollback catalog change
             catalog_.dropTable(table_name);
             return ExecutionResult::error(
@@ -116,7 +123,14 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
         );
     }
 
-    const Schema& schema = catalog_.getTable(table_name)->schema();
+    const Table* table = catalog_.getTable(table_name);
+    if (!table) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "Internal error: table lookup failed"
+        );
+    }
+    const Schema& schema = table->schema();
 
     // Check column count
     const auto& values = stmt.values();
@@ -212,7 +226,7 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
         );
     }
 
-    return ExecutionResult::empty();
+    return ExecutionResult::empty(1);
 }
 
 ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
@@ -233,7 +247,14 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
         );
     }
 
-    const Schema& schema = catalog_.getTable(table_name)->schema();
+    const Table* table = catalog_.getTable(table_name);
+    if (!table) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "Internal error: table lookup failed"
+        );
+    }
+    const Schema& schema = table->schema();
     const parser::Expr* where_clause = stmt.whereClause();
 
     // Two-pass to avoid iterator invalidation from page migration
@@ -287,13 +308,19 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
     }
 
     // Apply collected updates
+    // NOTE: Without WAL, partial failures cannot be rolled back. Track applied count for diagnostics.
+    size_t applied_count = 0;
     for (auto& [tid, new_row] : updates) {
         if (!storage_mgr_->updateRow(tid, new_row, schema)) {
+            // Partial failure: some rows were updated, others were not.
+            // True atomicity requires WAL/undo log (future enhancement).
             return ExecutionResult::error(
                 ErrorCode::INTERNAL_ERROR,
-                "Failed to update row"
+                "Failed to update row (" + std::to_string(applied_count) + " of " +
+                std::to_string(updates.size()) + " rows updated before failure)"
             );
         }
+        ++applied_count;
     }
 
     return ExecutionResult::empty();
@@ -316,7 +343,14 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
         );
     }
 
-    const Schema& schema = catalog_.getTable(table_name)->schema();
+    const Table* table = catalog_.getTable(table_name);
+    if (!table) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "Internal error: table lookup failed"
+        );
+    }
+    const Schema& schema = table->schema();
     const parser::Expr* where_clause = stmt.whereClause();
 
     // Two-pass to avoid iterator invalidation
@@ -336,13 +370,19 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
     }
 
     // Apply collected deletes
+    // NOTE: Without WAL, partial failures cannot be rolled back. Track applied count for diagnostics.
+    size_t applied_count = 0;
     for (const TID& tid : tids_to_delete) {
         if (!storage_mgr_->deleteRow(tid)) {
+            // Partial failure: some rows were deleted, others were not.
+            // True atomicity requires WAL/undo log (future enhancement).
             return ExecutionResult::error(
                 ErrorCode::INTERNAL_ERROR,
-                "Failed to delete row"
+                "Failed to delete row (" + std::to_string(applied_count) + " of " +
+                std::to_string(tids_to_delete.size()) + " rows deleted before failure)"
             );
         }
+        ++applied_count;
     }
 
     return ExecutionResult::empty();
@@ -398,7 +438,11 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
         return false;
     }
 
-    const Schema& schema = catalog_.getTable(table_name)->schema();
+    const Table* table_ptr = catalog_.getTable(table_name);
+    if (!table_ptr) {
+        return false;
+    }
+    const Schema& schema = table_ptr->schema();
 
     // Check if this is an aggregate query
     if (hasAggregates(stmt) || stmt.hasGroupBy()) {
@@ -416,21 +460,7 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
         }
 
         // Apply LIMIT and OFFSET
-        if (stmt.hasLimit() || stmt.hasOffset()) {
-            size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
-            size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
-
-            if (offset >= result_rows_.size()) {
-                result_rows_.clear();
-            } else {
-                size_t end_index = std::min(offset + limit, result_rows_.size());
-                std::vector<Row> limited_rows;
-                for (size_t i = offset; i < end_index; ++i) {
-                    limited_rows.push_back(std::move(result_rows_[i]));
-                }
-                result_rows_ = std::move(limited_rows);
-            }
-        }
+        applyLimitOffset(stmt);
 
         return true;
     }
@@ -491,23 +521,7 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
     }
 
     // Apply DISTINCT if specified
-    if (stmt.isDistinct()) {
-        // Remove duplicates
-        std::vector<Row> unique_rows;
-        for (const auto& row : result_rows_) {
-            bool is_duplicate = false;
-            for (const auto& unique_row : unique_rows) {
-                if (rowsEqual(row, unique_row)) {
-                    is_duplicate = true;
-                    break;
-                }
-            }
-            if (!is_duplicate) {
-                unique_rows.push_back(row);
-            }
-        }
-        result_rows_ = std::move(unique_rows);
-    }
+    applyDistinct(stmt);
 
     // Apply ORDER BY if specified
     if (stmt.hasOrderBy()) {
@@ -515,23 +529,7 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
     }
 
     // Apply LIMIT and OFFSET
-    if (stmt.hasLimit() || stmt.hasOffset()) {
-        size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
-        size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
-
-        // Apply offset
-        if (offset >= result_rows_.size()) {
-            result_rows_.clear();
-        } else {
-            // Apply limit after offset  TODO: Optimize this later, could do it earlier.
-            size_t end_index = std::min(offset + limit, result_rows_.size());
-            std::vector<Row> limited_rows;
-            for (size_t i = offset; i < end_index; ++i) {
-                limited_rows.push_back(std::move(result_rows_[i]));
-            }
-            result_rows_ = std::move(limited_rows);
-        }
-    }
+    applyLimitOffset(stmt);
 
     return true;
 }
@@ -680,65 +678,54 @@ Value Executor::evaluateExpr(const parser::Expr* expr, const Row& row, const Sch
             }
 
             // Helper lambda to check if a type is numeric
-            auto isNumericType = [](LogicalTypeId id) {
+            auto is_numeric_type = [](LogicalTypeId id) {
                 return id == LogicalTypeId::INTEGER ||
                        id == LogicalTypeId::BIGINT ||
                        id == LogicalTypeId::FLOAT ||
                        id == LogicalTypeId::DOUBLE;
             };
 
-            // Helper lambda to convert a value to double for numeric comparison
-            auto toDouble = [](const Value& v) -> double {
-                switch (v.typeId()) {
-                    case LogicalTypeId::INTEGER: return static_cast<double>(v.asInt32());
-                    case LogicalTypeId::BIGINT: return static_cast<double>(v.asInt64());
-                    case LogicalTypeId::FLOAT: return static_cast<double>(v.asFloat());
-                    case LogicalTypeId::DOUBLE: return v.asDouble();
-                    default: return 0.0;
-                }
-            };
-
             // Comparison operators with type coercion for numeric types
             if (op == "=") {
                 // If both are numeric, compare as doubles
-                if (isNumericType(left.typeId()) && isNumericType(right.typeId())) {
-                    return Value::boolean(toDouble(left) == toDouble(right));
+                if (is_numeric_type(left.typeId()) && is_numeric_type(right.typeId())) {
+                    return Value::boolean(to_double(left) == to_double(right));
                 }
                 return Value::boolean(left.equals(right));
             }
             if (op == "<>" || op == "!=") {
                 // If both are numeric, compare as doubles
-                if (isNumericType(left.typeId()) && isNumericType(right.typeId())) {
-                    return Value::boolean(toDouble(left) != toDouble(right));
+                if (is_numeric_type(left.typeId()) && is_numeric_type(right.typeId())) {
+                    return Value::boolean(to_double(left) != to_double(right));
                 }
                 return Value::boolean(!left.equals(right));
             }
             if (op == "<") {
                 // If both are numeric, compare as doubles
-                if (isNumericType(left.typeId()) && isNumericType(right.typeId())) {
-                    return Value::boolean(toDouble(left) < toDouble(right));
+                if (is_numeric_type(left.typeId()) && is_numeric_type(right.typeId())) {
+                    return Value::boolean(to_double(left) < to_double(right));
                 }
                 return Value::boolean(left.lessThan(right));
             }
             if (op == ">") {
                 // If both are numeric, compare as doubles
-                if (isNumericType(left.typeId()) && isNumericType(right.typeId())) {
-                    return Value::boolean(toDouble(left) > toDouble(right));
+                if (is_numeric_type(left.typeId()) && is_numeric_type(right.typeId())) {
+                    return Value::boolean(to_double(left) > to_double(right));
                 }
                 return Value::boolean(right.lessThan(left));
             }
             if (op == "<=") {
                 // If both are numeric, compare as doubles
-                if (isNumericType(left.typeId()) && isNumericType(right.typeId())) {
-                    double l = toDouble(left), r = toDouble(right);
+                if (is_numeric_type(left.typeId()) && is_numeric_type(right.typeId())) {
+                    double l = to_double(left), r = to_double(right);
                     return Value::boolean(l <= r);
                 }
                 return Value::boolean(left.lessThan(right) || left.equals(right));
             }
             if (op == ">=") {
                 // If both are numeric, compare as doubles
-                if (isNumericType(left.typeId()) && isNumericType(right.typeId())) {
-                    double l = toDouble(left), r = toDouble(right);
+                if (is_numeric_type(left.typeId()) && is_numeric_type(right.typeId())) {
+                    double l = to_double(left), r = to_double(right);
                     return Value::boolean(l >= r);
                 }
                 return Value::boolean(right.lessThan(left) || left.equals(right));
@@ -1217,44 +1204,15 @@ bool Executor::processJoins(const parser::SelectStmt& stmt) {
     }
     
     // Apply DISTINCT if specified
-    if (stmt.isDistinct()) {
-        std::vector<Row> unique_rows;
-        for (const auto& row : result_rows_) {
-            bool is_duplicate = false;
-            for (const auto& unique_row : unique_rows) {
-                if (rowsEqual(row, unique_row)) {
-                    is_duplicate = true;
-                    break;
-                }
-            }
-            if (!is_duplicate) {
-                unique_rows.push_back(row);
-            }
-        }
-        result_rows_ = std::move(unique_rows);
-    }
-    
+    applyDistinct(stmt);
+
     // Apply ORDER BY if specified
     if (stmt.hasOrderBy()) {
         sortResultRows(stmt, alias_map, joined_schema_);
     }
-    
+
     // Apply LIMIT and OFFSET
-    if (stmt.hasLimit() || stmt.hasOffset()) {
-        size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
-        size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
-        
-        if (offset >= result_rows_.size()) {
-            result_rows_.clear();
-        } else {
-            size_t end_index = std::min(offset + limit, result_rows_.size());
-            std::vector<Row> limited_rows;
-            for (size_t i = offset; i < end_index; ++i) {
-                limited_rows.push_back(std::move(result_rows_[i]));
-            }
-            result_rows_ = std::move(limited_rows);
-        }
-    }
+    applyLimitOffset(stmt);
     
     return true;
 }
@@ -1721,17 +1679,7 @@ Value Executor::evaluateExprWithAggregates(const parser::Expr* expr,
             if (op == ">=") return Value::boolean(right.lessThan(left) || left.equals(right));
 
             // Arithmetic operators - simplified
-            auto toDouble = [](const Value& v) -> double {
-                switch (v.typeId()) {
-                    case LogicalTypeId::INTEGER: return v.asInt32();
-                    case LogicalTypeId::BIGINT: return static_cast<double>(v.asInt64());
-                    case LogicalTypeId::FLOAT: return v.asFloat();
-                    case LogicalTypeId::DOUBLE: return v.asDouble();
-                    default: return 0.0;
-                }
-            };
-
-            double l = toDouble(left), r = toDouble(right);
+            double l = to_double(left), r = to_double(right);
             if (op == "+") return Value::Double(l + r);
             if (op == "-") return Value::Double(l - r);
             if (op == "*") return Value::Double(l * r);
@@ -2118,6 +2066,61 @@ bool Executor::matchLikePattern(const std::string& str, const std::string& patte
     }
 
     return dp[m][n];
+}
+
+// =============================================================================
+// Result post-processing helpers
+// =============================================================================
+
+void Executor::applyDistinct(const parser::SelectStmt& stmt) {
+    if (!stmt.isDistinct()) return;
+
+    std::vector<Row> unique_rows;
+    for (const auto& row : result_rows_) {
+        bool is_duplicate = false;
+        for (const auto& unique_row : unique_rows) {
+            if (rowsEqual(row, unique_row)) {
+                is_duplicate = true;
+                break;
+            }
+        }
+        if (!is_duplicate) {
+            unique_rows.push_back(row);
+        }
+    }
+    result_rows_ = std::move(unique_rows);
+}
+
+void Executor::applyLimitOffset(const parser::SelectStmt& stmt) {
+    if (!stmt.hasLimit() && !stmt.hasOffset()) return;
+
+    size_t offset = stmt.hasOffset() ? static_cast<size_t>(stmt.offset().value()) : 0;
+    size_t limit = stmt.hasLimit() ? static_cast<size_t>(stmt.limit().value()) : result_rows_.size();
+
+    if (offset >= result_rows_.size()) {
+        result_rows_.clear();
+    } else {
+        size_t end_index = std::min(offset + limit, result_rows_.size());
+        std::vector<Row> limited_rows;
+        for (size_t i = offset; i < end_index; ++i) {
+            limited_rows.push_back(std::move(result_rows_[i]));
+        }
+        result_rows_ = std::move(limited_rows);
+    }
+}
+
+// =============================================================================
+// Static helpers
+// =============================================================================
+
+double Executor::to_double(const Value& v) {
+    switch (v.typeId()) {
+        case LogicalTypeId::INTEGER: return static_cast<double>(v.asInt32());
+        case LogicalTypeId::BIGINT:  return static_cast<double>(v.asInt64());
+        case LogicalTypeId::FLOAT:   return static_cast<double>(v.asFloat());
+        case LogicalTypeId::DOUBLE:  return v.asDouble();
+        default: return 0.0;
+    }
 }
 
 } // namespace seeddb

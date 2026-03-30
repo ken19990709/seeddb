@@ -67,7 +67,7 @@ public:
 
     /// Checks if this PageId is valid.
     /// @return true if valid, false otherwise.
-    bool isValid() const {
+    bool is_valid() const {
         return file_id_ != INVALID_FILE_ID && page_num_ != INVALID_PAGE_NUM;
     }
 
@@ -104,7 +104,7 @@ public:
     /// Returns a string representation of this PageId.
     /// @return String in format "(file_id, page_num)" or "(INVALID)".
     std::string toString() const {
-        if (!isValid()) {
+        if (!is_valid()) {
             return "(INVALID)";
         }
         return "(" + std::to_string(file_id_) + ", " + std::to_string(page_num_) + ")";

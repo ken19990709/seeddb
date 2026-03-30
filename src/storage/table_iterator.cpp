@@ -18,7 +18,7 @@ HeapTableIterator::HeapTableIterator(uint32_t file_id, uint32_t total_pages,
 {}
 
 HeapTableIterator::~HeapTableIterator() {
-    if (pinned_page_id_.isValid()) {
+    if (pinned_page_id_.is_valid()) {
         buffer_pool_.UnpinPage(pinned_page_id_, false);
     }
 }
@@ -29,10 +29,10 @@ bool HeapTableIterator::next() {
 
     while (current_page_num_ < total_pages_) {
         // Fetch page if not already pinned
-        if (!pinned_page_id_.isValid() ||
+        if (!pinned_page_id_.is_valid() ||
             current_page_num_ != pinned_page_id_.pageNum()) {
             // Unpin previous page
-            if (pinned_page_id_.isValid()) {
+            if (pinned_page_id_.is_valid()) {
                 buffer_pool_.UnpinPage(pinned_page_id_, false);
                 current_page_ = nullptr;
             }
@@ -66,7 +66,7 @@ bool HeapTableIterator::next() {
     }
 
     // All pages exhausted
-    if (pinned_page_id_.isValid()) {
+    if (pinned_page_id_.is_valid()) {
         buffer_pool_.UnpinPage(pinned_page_id_, false);
         current_page_ = nullptr;
         pinned_page_id_ = PageId();

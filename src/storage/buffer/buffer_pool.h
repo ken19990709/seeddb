@@ -50,6 +50,12 @@ public:
     /// Returns nullptr if all frames are pinned (pool exhausted).
     Page* FetchPage(PageId page_id);
 
+    /// Allocate a new page for @p file_id and bring it into the buffer pool.
+    /// Unlike FetchPage, this creates a fresh empty page (not loaded from disk).
+    /// Returns nullptr if allocation fails or all frames are pinned.
+    /// The returned page is pinned (pin_count = 1) and marked dirty.
+    Page* NewPage(uint32_t file_id, PageId* out_page_id);
+
     /// Decrement pin_count for @p page_id.
     /// If is_dirty is true, sets frame.is_dirty = true.
     /// If pin_count drops to 0, makes frame eligible for eviction.
