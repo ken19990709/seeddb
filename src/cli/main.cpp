@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
     Config config;
     config.load("seeddb.conf");
 
-    StorageManager storage_mgr(config.data_directory());
+    StorageManager storage_mgr(config.data_directory(), config);
     Catalog catalog;
     storage_mgr.load(catalog);
 
