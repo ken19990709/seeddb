@@ -291,6 +291,170 @@ TEST_CASE("StorageManager - createIterator returns nullptr for missing table", "
     REQUIRE(sm.createIterator("no_such_table") == nullptr);
 }
 
+// =============================================================================
+// Section 7 — Error handling tests
+// =============================================================================
+
+TEST_CASE("StorageManager - deleteRow with invalid TID returns false",
+          "[storage_manager][error]") {
+    TempDirCfg td;
+    Schema schema = makeSchema();
+
+    StorageManager sm(td.path, td.config);
+    Catalog catalog;
+    REQUIRE(sm.load(catalog));
+    REQUIRE(sm.onCreateTable("err", schema));
+
+    // TID points to a non-existent page
+    TID invalid_tid{42, 999, 0};
+    REQUIRE_FALSE(sm.deleteRow(invalid_tid));
+}
+
+TEST_CASE("StorageManager - updateRow with invalid TID returns false",
+          "[storage_manager][error]") {
+    TempDirCfg td;
+    Schema schema = makeSchema();
+
+    StorageManager sm(td.path, td.config);
+    Catalog catalog;
+    REQUIRE(sm.load(catalog));
+    REQUIRE(sm.onCreateTable("err", schema));
+
+    TID invalid_tid{42, 999, 0};
+    REQUIRE_FALSE(sm.updateRow(invalid_tid, makeRow(1, "x"), schema));
+}
+
+TEST_CASE("StorageManager - insertRow on non-existent table returns false",
+          "[storage_manager][error]") {
+    TempDirCfg td;
+    Schema schema = makeSchema();
+
+    StorageManager sm(td.path, td.config);
+    Catalog catalog;
+    REQUIRE(sm.load(catalog));
+    // "ghost" table was never created
+    REQUIRE_FALSE(sm.insertRow("ghost", makeRow(1, "a"), schema));
+}
+
+TEST_CASE("StorageManager - operations on dropped table fail",
+          "[storage_manager][error]") {
+    TempDirCfg td;
+    Schema schema = makeSchema();
+
+    StorageManager sm(td.path, td.config);
+    Catalog catalog;
+    REQUIRE(sm.load(catalog));
+    REQUIRE(sm.onCreateTable("temp_t", schema));
+
+    // Insert a row
+    REQUIRE(sm.insertRow("temp_t", makeRow(1, "data"), schema));
+
+    // Drop the table
+    REQUIRE(sm.onDropTable("temp_t"));
+
+    // All operations should fail now
+    REQUIRE_FALSE(sm.insertRow("temp_t", makeRow(2, "x"), schema));
+    REQUIRE(sm.createIterator("temp_t") == nullptr);
+    REQUIRE(sm.pageCount("temp_t") == 0);
+}
+
+TEST_CASE("StorageManager - sequential insert-update-delete cycle",
+          "[storage_manager][error]") {
+    TempDirCfg td;
+    Schema schema = makeSchema();
+
+    // Session 1: INSERT -> UPDATE -> DELETE -> verify empty
+    {
+        StorageManager sm(td.path, td.config);
+        Catalog catalog;
+        REQUIRE(sm.load(catalog));
+        REQUIRE(sm.onCreateTable("cycle", schema));
+
+        // Insert 5 rows
+        for (int i = 0; i < 5; ++i) {
+            REQUIRE(sm.insertRow("cycle", makeRow(i, "row" + std::to_string(i)), schema));
+        }
+
+        // Collect TIDs
+        auto iter = sm.createIterator("cycle");
+        REQUIRE(iter != nullptr);
+        std::vector<TID> tids;
+        while (iter->next()) {
+            tids.push_back(iter->currentTID());
+        }
+        REQUIRE(tids.size() == 5);
+
+        // Update rows 0, 2, 4
+        REQUIRE(sm.updateRow(tids[0], makeRow(0, "updated_0"), schema));
+        REQUIRE(sm.updateRow(tids[2], makeRow(2, "updated_2"), schema));
+        REQUIRE(sm.updateRow(tids[4], makeRow(4, "updated_4"), schema));
+
+        // Delete rows 1, 3
+        REQUIRE(sm.deleteRow(tids[1]));
+        REQUIRE(sm.deleteRow(tids[3]));
+
+        // Verify: 3 rows remain (0, 2, 4 — all updated)
+        auto iter2 = sm.createIterator("cycle");
+        std::vector<std::string> names;
+        while (iter2->next()) {
+            names.push_back(iter2->currentRow().get(1).asString());
+        }
+        REQUIRE(names.size() == 3);
+        REQUIRE(names[0] == "updated_0");
+        REQUIRE(names[1] == "updated_2");
+        REQUIRE(names[2] == "updated_4");
+    }
+
+    // Session 2: verify persistence
+    {
+        StorageManager sm(td.path, td.config);
+        Catalog catalog;
+        REQUIRE(sm.load(catalog));
+
+        auto iter = sm.createIterator("cycle");
+        int count = 0;
+        while (iter->next()) {
+            REQUIRE(iter->currentRow().get(1).asString().substr(0, 8) == "updated_");
+            count++;
+        }
+        REQUIRE(count == 3);
+    }
+}
+
+TEST_CASE("StorageManager - multi-page insert and full scan verification",
+          "[storage_manager][error]") {
+    TempDirCfg td;
+
+    // Schema with a single VARCHAR column — each row ~200 bytes, ~18 rows/page
+    Schema schema({ColumnSchema("data", LogicalType(LogicalTypeId::VARCHAR), false)});
+
+    StorageManager sm(td.path, td.config);
+    Catalog catalog;
+    REQUIRE(sm.load(catalog));
+    REQUIRE(sm.onCreateTable("capacity", schema));
+
+    // Insert 500 rows spanning many pages
+    const int ROW_COUNT = 500;
+    for (int i = 0; i < ROW_COUNT; ++i) {
+        std::string val(200, static_cast<char>('a' + (i % 26)));
+        Row row({Value::varchar(val)});
+        REQUIRE(sm.insertRow("capacity", row, schema));
+    }
+
+    // Verify multi-page
+    REQUIRE(sm.pageCount("capacity") > 1);
+
+    // Verify all rows readable in order
+    auto iter = sm.createIterator("capacity");
+    int verified = 0;
+    while (iter->next()) {
+        std::string data = iter->currentRow().get(0).asString();
+        REQUIRE(data.size() == 200);
+        verified++;
+    }
+    REQUIRE(verified == ROW_COUNT);
+}
+
 TEST_CASE("StorageManager - insertRow returns false for oversized row", "[storage_manager]") {
     TempDirCfg td;
     Schema schema({ColumnSchema("data", LogicalType(LogicalTypeId::VARCHAR), false)});
