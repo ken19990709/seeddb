@@ -344,7 +344,9 @@ private:
     /// Process aggregate query and populate result_rows_.
     /// @param stmt The SELECT statement.
     /// @param schema The source table schema.
-    void processAggregateQuery(const parser::SelectStmt& stmt, const Schema& schema);
+    void processAggregateQuery(const parser::SelectStmt& stmt,
+                               const std::string& table_name,
+                               const Schema& schema);
 
     /// Evaluate an expression, replacing aggregates with finalized values.
     /// @param expr The expression to evaluate.
@@ -422,7 +424,6 @@ private:
     std::string generateAggregateName(const parser::AggregateExpr* agg) const;
 
     // Query state for SELECT iteration
-    Table* current_table_ = nullptr;           ///< Current table being queried.
     std::vector<Row> result_rows_;             ///< Result rows (projected, distinct, sorted).
     size_t current_row_index_ = 0;             ///< Current position in result_rows_.
     

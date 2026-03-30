@@ -1,6 +1,8 @@
 #include "executor/executor.h"
 #include "executor/function.h"
 #include "storage/storage_manager.h"
+#include "storage/table_iterator.h"
+#include "storage/tid.h"
 
 #include <algorithm>
 
@@ -102,9 +104,7 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
         );
     }
 
-    // Get the table
-    Table* table = catalog_.getTable(table_name);
-    const Schema& schema = table->schema();
+    const Schema& schema = catalog_.getTable(table_name)->schema();
 
     // Check column count
     const auto& values = stmt.values();
@@ -187,11 +187,19 @@ ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {
         );
     }
 
-    // Insert the row into the table
-    if (storage_mgr_) {
-        storage_mgr_->appendRow(table_name, row, schema);
+    // Insert the row into the table via storage manager
+    if (!storage_mgr_) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "No storage manager available"
+        );
     }
-    table->insert(std::move(row));
+    if (!storage_mgr_->insertRow(table_name, row, schema)) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "Failed to insert row"
+        );
+    }
 
     return ExecutionResult::empty();
 }
@@ -207,76 +215,74 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
         );
     }
 
-    Table* table = catalog_.getTable(table_name);
-    const Schema& schema = table->schema();
-    const parser::Expr* where_clause = stmt.whereClause();
-
-    // Track rows to update and count of updated rows
-    std::vector<size_t> rows_to_update;
-    size_t update_count = 0;
-
-    // Find matching rows
-    for (size_t i = 0; i < table->rowCount(); ++i) {
-        const Row& row = table->get(i);
-        if (!where_clause || evaluateWhereClause(where_clause, row, schema)) {
-            rows_to_update.push_back(i);
-        }
+    if (!storage_mgr_) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "No storage manager available"
+        );
     }
 
-    // Update matching rows
-    for (size_t idx : rows_to_update) {
-        // Take a value copy to avoid stale reference after table->update()
-        Row old_row = table->get(idx);
+    const Schema& schema = catalog_.getTable(table_name)->schema();
+    const parser::Expr* where_clause = stmt.whereClause();
 
-        // Build new row with updated values
-        std::vector<Value> new_values;
-        new_values.reserve(schema.columnCount());
+    // Pass 1: Collect (TID, new_row) pairs for matching rows
+    std::vector<std::pair<TID, Row>> updates;
+    auto iter = storage_mgr_->createIterator(table_name);
+    if (!iter) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "Failed to create iterator for table '" + table_name + "'"
+        );
+    }
 
-        // Copy old values
-        for (size_t i = 0; i < schema.columnCount(); ++i) {
-            new_values.push_back(old_row.get(i));
-        }
+    while (iter->next()) {
+        const Row& old_row = iter->currentRow();
+        if (!where_clause || evaluateWhereClause(where_clause, old_row, schema)) {
+            // Build new row with updated values
+            std::vector<Value> new_values;
+            new_values.reserve(schema.columnCount());
 
-        // Apply assignments
-        const auto& assignments = stmt.assignments();
-        for (const auto& [col_name, expr] : assignments) {
-            // Find column index
-            auto col_idx_opt = schema.columnIndex(col_name);
-            if (!col_idx_opt.has_value()) {
+            // Copy old values
+            for (size_t i = 0; i < schema.columnCount(); ++i) {
+                new_values.push_back(old_row.get(i));
+            }
+
+            // Apply assignments
+            const auto& assignments = stmt.assignments();
+            for (const auto& [col_name, expr] : assignments) {
+                auto col_idx_opt = schema.columnIndex(col_name);
+                if (!col_idx_opt.has_value()) {
+                    return ExecutionResult::error(
+                        ErrorCode::COLUMN_NOT_FOUND,
+                        "Column '" + col_name + "' not found in table '" + table_name + "'"
+                    );
+                }
+                size_t col_idx = col_idx_opt.value();
+                Value new_value = evaluateExpr(expr.get(), old_row, schema);
+                new_values[col_idx] = new_value;
+            }
+
+            // Validate new row
+            Row new_row(std::move(new_values));
+            if (!schema.validateRow(new_row)) {
                 return ExecutionResult::error(
-                    ErrorCode::COLUMN_NOT_FOUND,
-                    "Column '" + col_name + "' not found in table '" + table_name + "'"
+                    ErrorCode::CONSTRAINT_VIOLATION,
+                    "Updated row violates schema constraints"
                 );
             }
 
-            size_t col_idx = col_idx_opt.value();
-
-            // Evaluate the expression using the old row for column references
-            Value new_value = evaluateExpr(expr.get(), old_row, schema);
-            new_values[col_idx] = new_value;
+            updates.emplace_back(iter->currentTID(), std::move(new_row));
         }
-
-        // Create new row and validate
-        Row new_row(std::move(new_values));
-        if (!schema.validateRow(new_row)) {
-            return ExecutionResult::error(
-                ErrorCode::CONSTRAINT_VIOLATION,
-                "Updated row violates schema constraints"
-            );
-        }
-
-        // Update the row
-        table->update(idx, std::move(new_row));
-        update_count++;
     }
 
-        // Store update count for CLI to display
-    // For now, return empty result (CLI will show "UPDATE N" separately)
-    (void)update_count;  // Will be used later for result display
-
-    // Persist updated table to disk
-    if (storage_mgr_) {
-        storage_mgr_->checkpoint(table_name, *table);
+    // Pass 2: Apply updates
+    for (auto& [tid, new_row] : updates) {
+        if (!storage_mgr_->updateRow(tid, new_row, schema)) {
+            return ExecutionResult::error(
+                ErrorCode::INTERNAL_ERROR,
+                "Failed to update row"
+            );
+        }
     }
 
     return ExecutionResult::empty();
@@ -285,7 +291,6 @@ ExecutionResult Executor::execute(const parser::UpdateStmt& stmt) {
 ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
     const std::string& table_name = stmt.tableName();
 
-    // Check if table exists
     if (!catalog_.hasTable(table_name)) {
         return ExecutionResult::error(
             ErrorCode::TABLE_NOT_FOUND,
@@ -293,29 +298,40 @@ ExecutionResult Executor::execute(const parser::DeleteStmt& stmt) {
         );
     }
 
-    Table* table = catalog_.getTable(table_name);
-    const Schema& schema = table->schema();
+    if (!storage_mgr_) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "No storage manager available"
+        );
+    }
+
+    const Schema& schema = catalog_.getTable(table_name)->schema();
     const parser::Expr* where_clause = stmt.whereClause();
 
-    // Find rows to delete (collect indices in ascending order)
-    std::vector<size_t> rows_to_delete;
-    for (size_t i = 0; i < table->rowCount(); ++i) {
-        const Row& row = table->get(i);
-        if (!where_clause || evaluateWhereClause(where_clause, row, schema)) {
-            rows_to_delete.push_back(i);
+    // Pass 1: Collect TIDs of matching rows
+    std::vector<TID> tids_to_delete;
+    auto iter = storage_mgr_->createIterator(table_name);
+    if (!iter) {
+        return ExecutionResult::error(
+            ErrorCode::INTERNAL_ERROR,
+            "Failed to create iterator for table '" + table_name + "'"
+        );
+    }
+
+    while (iter->next()) {
+        if (!where_clause || evaluateWhereClause(where_clause, iter->currentRow(), schema)) {
+            tids_to_delete.push_back(iter->currentTID());
         }
     }
 
-    // Delete rows from end to start to avoid index shifting issues
-    size_t delete_count = rows_to_delete.size();
-    // Bulk delete in O(n) time using erase-remove idiom
-    table->removeBulk(rows_to_delete);
-
-    (void)delete_count;  // Will be used later for result display
-
-    // Persist updated table to disk
-    if (storage_mgr_) {
-        storage_mgr_->checkpoint(table_name, *table);
+    // Pass 2: Apply deletes
+    for (const TID& tid : tids_to_delete) {
+        if (!storage_mgr_->deleteRow(tid)) {
+            return ExecutionResult::error(
+                ErrorCode::INTERNAL_ERROR,
+                "Failed to delete row"
+            );
+        }
     }
 
     return ExecutionResult::empty();
@@ -371,18 +387,12 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
         return false;
     }
 
-    // Get the table
-    current_table_ = catalog_.getTable(table_name);
-    if (!current_table_) {
-        return false;
-    }
-
-    const Schema& schema = current_table_->schema();
+    const Schema& schema = catalog_.getTable(table_name)->schema();
 
     // Check if this is an aggregate query
     if (hasAggregates(stmt) || stmt.hasGroupBy()) {
         // Process aggregate query
-        processAggregateQuery(stmt, schema);
+        processAggregateQuery(stmt, table_name, schema);
 
         // Build alias map and result schema for aggregate results
         std::unordered_map<std::string, std::string> alias_map;
@@ -448,8 +458,15 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
     // Find matching rows and project them
     const parser::Expr* where_clause = stmt.whereClause();
 
-    for (size_t i = 0; i < current_table_->rowCount(); ++i) {
-        const Row& row = current_table_->get(i);
+    if (!storage_mgr_) {
+        return false;
+    }
+    auto iter = storage_mgr_->createIterator(table_name);
+    if (!iter) {
+        return false;
+    }
+    while (iter->next()) {
+        const Row& row = iter->currentRow();
 
         // Apply WHERE clause filter
         if (where_clause && !evaluateWhereClause(where_clause, row, schema)) {
@@ -508,7 +525,7 @@ bool Executor::prepareSelect(const parser::SelectStmt& stmt) {
 }
 
 bool Executor::hasNext() const {
-    return current_table_ != nullptr && current_row_index_ < result_rows_.size();
+    return current_row_index_ < result_rows_.size();
 }
 
 ExecutionResult Executor::next() {
@@ -529,7 +546,6 @@ ExecutionResult Executor::next() {
 }
 
 void Executor::resetQuery() {
-    current_table_ = nullptr;
     result_rows_.clear();
     current_row_index_ = 0;
     
@@ -1069,26 +1085,24 @@ bool Executor::processJoins(const parser::SelectStmt& stmt) {
     }
     
     // Validate all tables exist and build schema map
-    std::vector<Table*> tables;
     table_schemas_.clear();
     table_aliases_.clear();
-    
+
     for (const auto* table_ref : all_tables) {
         const std::string& table_name = table_ref->name();
-        
+
         // Check if table exists
         if (!catalog_.hasTable(table_name)) {
             return false;
         }
-        
+
         Table* table = catalog_.getTable(table_name);
         if (!table) {
             return false;
         }
-        
-        tables.push_back(table);
+
         table_schemas_[table_name] = &table->schema();
-        
+
         // Store alias mapping
         if (table_ref->hasAlias()) {
             table_aliases_[table_ref->alias()] = table_name;
@@ -1096,14 +1110,18 @@ bool Executor::processJoins(const parser::SelectStmt& stmt) {
             table_aliases_[table_name] = table_name;  // Self-mapping for unaliased tables
         }
     }
-    
+
     // Build combined schema for all tables
     joined_schema_ = buildJoinedSchema(stmt, table_schemas_);
-    
-    // Start with the first table's rows
+
+    if (!storage_mgr_) return false;
+
+    // Start with the first table's rows (via iterator)
     std::vector<Row> current_rows;
-    for (size_t i = 0; i < tables[0]->rowCount(); ++i) {
-        current_rows.push_back(tables[0]->get(i));
+    auto first_iter = storage_mgr_->createIterator(all_tables[0]->name());
+    if (!first_iter) return false;
+    while (first_iter->next()) {
+        current_rows.push_back(Row(first_iter->currentRow()));
     }
     
     // Process each join in sequence
@@ -1114,12 +1132,13 @@ bool Executor::processJoins(const parser::SelectStmt& stmt) {
         const parser::TableRef* right_table_ref = join->table();
         const std::string& right_table_name = right_table_ref->name();
         const Schema* right_schema = table_schemas_[right_table_name];
-        
-        // Get right table rows
-        Table* right_table = catalog_.getTable(right_table_name);
+
+        // Get right table rows via iterator
+        auto right_iter = storage_mgr_->createIterator(right_table_name);
+        if (!right_iter) return false;
         std::vector<Row> right_rows;
-        for (size_t i = 0; i < right_table->rowCount(); ++i) {
-            right_rows.push_back(right_table->get(i));
+        while (right_iter->next()) {
+            right_rows.push_back(Row(right_iter->currentRow()));
         }
         
         // Perform join based on type
@@ -1518,7 +1537,9 @@ void Executor::collectAggregatesFromExpr(const parser::Expr* expr,
     }
 }
 
-void Executor::processAggregateQuery(const parser::SelectStmt& stmt, const Schema& schema) {
+void Executor::processAggregateQuery(const parser::SelectStmt& stmt,
+                                      const std::string& table_name,
+                                      const Schema& schema) {
     // Validate aggregate query constraints first
     auto validation = validateAggregateQuery(stmt, schema);
     if (validation.status() == ExecutionResult::Status::ERROR) {
@@ -1538,11 +1559,17 @@ void Executor::processAggregateQuery(const parser::SelectStmt& stmt, const Schem
     // Handle case with no GROUP BY (single implicit group)
     bool has_group_by = stmt.hasGroupBy();
 
-    // Process all matching rows
+    // Process all matching rows via iterator
     const parser::Expr* where_clause = stmt.whereClause();
 
-    for (size_t i = 0; i < current_table_->rowCount(); ++i) {
-        const Row& row = current_table_->get(i);
+    auto iter = storage_mgr_->createIterator(table_name);
+    if (!iter) {
+        result_rows_.clear();
+        throw std::runtime_error("Failed to create iterator for table '" + table_name + "'");
+    }
+
+    while (iter->next()) {
+        const Row& row = iter->currentRow();
 
         // Apply WHERE clause filter
         if (where_clause && !evaluateWhereClause(where_clause, row, schema)) {
