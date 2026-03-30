@@ -38,6 +38,7 @@ target_sources(seeddb_tests
         unit/storage/test_page_manager.cpp
         unit/storage/test_storage_manager.cpp
         unit/storage/test_buffer_pool.cpp
+        unit/storage/test_table_iterator.cpp
         unit/executor/test_executor.cpp
         unit/cli/test_formatter.cpp
 )
