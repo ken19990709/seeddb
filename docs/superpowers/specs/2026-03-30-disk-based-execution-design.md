@@ -70,8 +70,9 @@ public:
 
 Iterates through all slotted pages of a table via BufferPool:
 
-- **State:** `file_id`, current `page_num`, current `slot_id`, `BufferPool&`, `Schema&`
-- **On `next()`:** Advance slot index. Skip deleted slots (size == 0). When all slots on a page are consumed, unpin current page, fetch next page. When no more pages, return false.
+- **State:** `file_id`, `total_pages` (cached at construction), current `page_num`, current `slot_id`, `BufferPool&`, `Schema&`
+- **Construction:** StorageManager provides `file_id`, `total_pages` (from `page_mgr_.pageCount()`), and a `Schema&`. The iterator stores these and begins before the first row (caller must call `next()` first).
+- **On `next()`:** Advance slot index. Skip deleted slots (size == 0). When all slots on a page are consumed, unpin current page, fetch next page. When `page_num >= total_pages`, return false.
 - **Row materialization:** Deserializes on demand via `RowSerializer::deserialize()` when `currentRow()` is called (cached until next `next()` call).
 - **Pin management:** Current page is pinned while being iterated. Unpinned when moving to the next page or when iterator is destroyed.
 
@@ -122,9 +123,11 @@ StorageManager(const std::string& data_dir, const Config& config);
 
 **`insertRow(table_name, row, schema)`**:
 1. Serialize row via `RowSerializer::serialize()`
-2. Fetch last page via `buffer_pool_.FetchPage()` — if it has enough free space, insert record
-3. If last page is full (or no pages exist), allocate new page via `page_mgr_.allocatePage()`, fetch it, insert
-4. Mark page dirty, unpin page
+2. Check `page_mgr_.pageCount()` — if zero pages, go to step 4
+3. Fetch last page via `buffer_pool_.FetchPage(last_page_id)` — if it has enough free space, insert record, mark dirty, unpin, return
+4. Allocate new page via `page_mgr_.allocatePage()` — write the fresh page to disk via `page_mgr_.writePage()`, then fetch it through `buffer_pool_.FetchPage()` to insert the record, mark dirty, unpin
+
+> **Note:** New pages must be written to disk first (via PageManager) before BufferPool can fetch them. BufferPool only loads pages that exist on disk.
 
 **`updateRow(tid, new_row, schema)`** (delete + re-insert):
 1. Fetch page at `tid.page_num` via BufferPool
@@ -209,6 +212,8 @@ No more `table->insert()` or in-memory storage.
 ```
 
 Two-pass design avoids mutating pages while iterating (re-insert could land on a later page, corrupting iteration).
+
+> **Note:** The schema is obtained from the Catalog via `catalog_.getTable(table_name)->schema()`. The new_row is built by copying column values from `iter->currentRow()` and applying the SET assignments.
 
 ### 6.5 DELETE
 
