@@ -59,7 +59,14 @@ ExecutionResult Executor::execute(const parser::CreateTableStmt& stmt) {
 
     // Persist to disk if storage is available
     if (storage_mgr_) {
-        storage_mgr_->onCreateTable(table_name, catalog_.getTable(table_name)->schema());
+        if (!storage_mgr_->onCreateTable(table_name, catalog_.getTable(table_name)->schema())) {
+            // Disk creation failed - rollback catalog change
+            catalog_.dropTable(table_name);
+            return ExecutionResult::error(
+                ErrorCode::IO_ERROR,
+                "Failed to persist table '" + table_name + "' to disk"
+            );
+        }
     }
 
     return ExecutionResult::empty();
@@ -82,7 +89,12 @@ ExecutionResult Executor::execute(const parser::DropTableStmt& stmt) {
 
     // Drop the table
     if (storage_mgr_) {
-        storage_mgr_->onDropTable(table_name);
+        if (!storage_mgr_->onDropTable(table_name)) {
+            return ExecutionResult::error(
+                ErrorCode::IO_ERROR,
+                "Failed to drop table '" + table_name + "' from disk"
+            );
+        }
     }
     catalog_.dropTable(table_name);
 
@@ -90,7 +102,7 @@ ExecutionResult Executor::execute(const parser::DropTableStmt& stmt) {
 }
 
 // =============================================================================
-// DML Execution (Stubs)
+// DML Execution
 // =============================================================================
 
 ExecutionResult Executor::execute(const parser::InsertStmt& stmt) {

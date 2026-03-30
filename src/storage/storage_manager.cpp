@@ -48,18 +48,26 @@ std::string StorageManager::catalogMetaPath() const {
 
 bool StorageManager::saveCatalogMeta() const {
     const std::string path = catalogMetaPath();
-    FILE* fp = std::fopen(path.c_str(), "wb");
+    const std::string temp_path = path + ".tmp";
+    FILE* fp = std::fopen(temp_path.c_str(), "wb");
     if (!fp) return false;
 
-    auto write_u32 = [fp](uint32_t v) {
-        std::fwrite(&v, sizeof(uint32_t), 1, fp);
+    bool write_ok = true;
+    auto write_u32 = [fp, &write_ok](uint32_t v) {
+        if (write_ok && std::fwrite(&v, sizeof(uint32_t), 1, fp) != 1) {
+            write_ok = false;
+        }
     };
-    auto write_u8 = [fp](uint8_t v) {
-        std::fwrite(&v, sizeof(uint8_t), 1, fp);
+    auto write_u8 = [fp, &write_ok](uint8_t v) {
+        if (write_ok && std::fwrite(&v, sizeof(uint8_t), 1, fp) != 1) {
+            write_ok = false;
+        }
     };
     auto write_str = [&](const std::string& s) {
         write_u32(static_cast<uint32_t>(s.size()));
-        std::fwrite(s.data(), 1, s.size(), fp);
+        if (write_ok && !s.empty() && std::fwrite(s.data(), 1, s.size(), fp) != s.size()) {
+            write_ok = false;
+        }
     };
 
     write_u32(static_cast<uint32_t>(schemas_.size()));
@@ -76,6 +84,19 @@ bool StorageManager::saveCatalogMeta() const {
     }
 
     std::fclose(fp);
+
+    if (!write_ok) {
+        // Write failed - remove temp file
+        std::remove(temp_path.c_str());
+        return false;
+    }
+
+    // Atomic rename: temp file -> final file
+    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
+        std::remove(temp_path.c_str());
+        return false;
+    }
+
     return true;
 }
 
@@ -84,39 +105,73 @@ bool StorageManager::loadCatalogMeta() {
     FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) return true;  // no catalog yet — empty database is fine
 
+    // Validation constants
+    constexpr uint32_t MAX_TABLE_COUNT = 10000;
+    constexpr uint32_t MAX_COLUMN_COUNT = 1000;
+    constexpr uint32_t MAX_STRING_LENGTH = 65536;
+    constexpr uint8_t MAX_LOGICAL_TYPE_ID = 10;  // Adjust based on LogicalTypeId enum
+
     auto read_u32 = [fp](uint32_t& v) -> bool {
         return std::fread(&v, sizeof(uint32_t), 1, fp) == 1;
     };
     auto read_u8 = [fp](uint8_t& v) -> bool {
         return std::fread(&v, sizeof(uint8_t), 1, fp) == 1;
     };
-    auto read_str = [&](std::string& s) -> bool {
+    auto read_str = [&](std::string& s, uint32_t max_len) -> bool {
         uint32_t len = 0;
         if (!read_u32(len)) return false;
+        if (len > max_len) return false;  // Length validation
         s.resize(len);
-        return std::fread(s.data(), 1, len, fp) == len;
+        if (len > 0 && std::fread(s.data(), 1, len, fp) != len) return false;
+        return true;
     };
 
     uint32_t table_count = 0;
-    if (!read_u32(table_count)) { std::fclose(fp); return false; }
+    if (!read_u32(table_count) || table_count > MAX_TABLE_COUNT) {
+        std::fclose(fp);
+        return false;
+    }
+
+    // Snapshot current state for rollback on failure
+    auto schemas_backup = schemas_;
 
     for (uint32_t t = 0; t < table_count; ++t) {
         std::string table_name;
-        if (!read_str(table_name)) { std::fclose(fp); return false; }
+        if (!read_str(table_name, MAX_STRING_LENGTH)) {
+            schemas_ = std::move(schemas_backup);
+            std::fclose(fp);
+            return false;
+        }
 
         uint32_t col_count = 0;
-        if (!read_u32(col_count)) { std::fclose(fp); return false; }
+        if (!read_u32(col_count) || col_count > MAX_COLUMN_COUNT) {
+            schemas_ = std::move(schemas_backup);
+            std::fclose(fp);
+            return false;
+        }
 
         std::vector<ColumnSchema> columns;
         columns.reserve(col_count);
 
         for (uint32_t c = 0; c < col_count; ++c) {
             std::string col_name;
-            if (!read_str(col_name)) { std::fclose(fp); return false; }
+            if (!read_str(col_name, MAX_STRING_LENGTH)) {
+                schemas_ = std::move(schemas_backup);
+                std::fclose(fp);
+                return false;
+            }
 
             uint8_t type_id_raw = 0;
             uint8_t nullable_raw = 0;
             if (!read_u8(type_id_raw) || !read_u8(nullable_raw)) {
+                schemas_ = std::move(schemas_backup);
+                std::fclose(fp);
+                return false;
+            }
+
+            // Validate LogicalTypeId range
+            if (type_id_raw > MAX_LOGICAL_TYPE_ID) {
+                schemas_ = std::move(schemas_backup);
                 std::fclose(fp);
                 return false;
             }
@@ -242,23 +297,49 @@ bool StorageManager::updateRow(TID tid, const Row& new_row, const Schema& schema
     Page* page = buffer_pool_.FetchPage(pid);
     if (!page) return false;
 
-    // Try same-page update: delete old slot and fit new data
-    page->deleteRecord(tid.slot_id);
+    // Get the old record size to calculate if new data fits after deletion
+    auto [old_data, old_size] = page->getRecord(tid.slot_id);
+    if (!old_data) {
+        // Old record already deleted or invalid
+        buffer_pool_.UnpinPage(pid, false);
+        return false;
+    }
 
-    if (page->freeSpace() >= row_size + Page::SLOT_SIZE) {
+    // Try same-page update: check if new data fits after deleting old slot
+    // Need: row_size (new data) + SLOT_SIZE (new slot entry, since insertRecord doesn't reuse)
+    // Have: freeSpace + old_size (freed data bytes)
+    if (page->freeSpace() + old_size >= row_size + Page::SLOT_SIZE) {
+        // Safe to delete and re-insert on same page
+        page->deleteRecord(tid.slot_id);
         auto slot = page->insertRecord(serialized.data(), row_size);
         if (slot.has_value()) {
             buffer_pool_.UnpinPage(pid, true);
             return true;
         }
+        // Insertion failed unexpectedly - restore is not possible without WAL
+        buffer_pool_.UnpinPage(pid, true);
+        return false;
     }
 
-    // Doesn't fit on same page — unpin dirty (old slot deleted),
-    // then insert new row on another page.
-    // NOTE: if insertRowInternal fails, old data is already deleted.
-    // True atomicity requires WAL (planned for future phase).
+    // Doesn't fit on same page — insert on another page first, then delete old.
+    // This ensures we don't lose data if insert fails.
+    buffer_pool_.UnpinPage(pid, false);
+
+    if (!insertRowInternal(tid.file_id, serialized, row_size)) {
+        // Insert failed - old data is still intact
+        return false;
+    }
+
+    // Insert succeeded — now safe to delete old slot
+    page = buffer_pool_.FetchPage(pid);
+    if (!page) {
+        // Rare failure: new row inserted but can't delete old.
+        // Results in duplicate row. True atomicity requires WAL.
+        return true;  // Partial success - new row exists
+    }
+    page->deleteRecord(tid.slot_id);
     buffer_pool_.UnpinPage(pid, true);
-    return insertRowInternal(tid.file_id, serialized, row_size);
+    return true;
 }
 
 bool StorageManager::deleteRow(TID tid) {

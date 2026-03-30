@@ -78,7 +78,19 @@ bool HeapTableIterator::next() {
 
 const Row& HeapTableIterator::currentRow() const {
     if (!row_cached_ && has_current_) {
+        // Defensive null pointer check
+        if (!current_page_) {
+            current_row_ = Row();
+            row_cached_ = true;
+            return current_row_;
+        }
         auto [data, size] = current_page_->getRecord(current_tid_.slot_id);
+        // Check for null/invalid record data
+        if (!data || size == 0) {
+            current_row_ = Row();
+            row_cached_ = true;
+            return current_row_;
+        }
         current_row_ = RowSerializer::deserialize(data, size, schema_);
         row_cached_ = true;
     }

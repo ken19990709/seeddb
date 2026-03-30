@@ -148,7 +148,7 @@ public:
     ExecutionResult execute(const parser::DropTableStmt& stmt);
 
     // =========================================================================
-    // DML Execution (Stubs - implementation in later tasks)
+    // DML Execution
     // =========================================================================
 
     /// Execute an INSERT statement.
@@ -172,7 +172,7 @@ public:
     ExecutionResult execute(const parser::SelectStmt& stmt);
 
     // =========================================================================
-    // SELECT Execution - Iterator Interface (Stubs - implementation in later tasks)
+    // SELECT Execution - Iterator Interface
     // =========================================================================
 
     /// Prepare a SELECT statement for execution.
