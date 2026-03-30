@@ -15,8 +15,11 @@ namespace seeddb {
 // Constructor
 // =============================================================================
 
-StorageManager::StorageManager(const std::string& data_dir)
-    : data_dir_(data_dir), page_mgr_(data_dir) {
+StorageManager::StorageManager(const std::string& data_dir, const Config& config)
+    : data_dir_(data_dir)
+    , page_mgr_(data_dir)
+    , buffer_pool_(page_mgr_, config)
+{
     fs::create_directories(data_dir_);
 }
 
@@ -260,6 +263,116 @@ bool StorageManager::checkpoint(const std::string& table_name, const Table& tabl
     }
 
     return true;
+}
+
+// =============================================================================
+// New disk-based API
+// =============================================================================
+
+bool StorageManager::insertRowInternal(uint32_t file_id,
+                                       const std::vector<char>& serialized,
+                                       uint16_t row_size) {
+    // Try to fit into the last existing page
+    uint32_t num_pages = page_mgr_.pageCount(file_id);
+    if (num_pages > 0) {
+        PageId last_pid(file_id, num_pages - 1);
+        Page* page = buffer_pool_.FetchPage(last_pid);
+        if (page && page->freeSpace() >= row_size + Page::SLOT_SIZE) {
+            auto slot = page->insertRecord(serialized.data(), row_size);
+            if (slot.has_value()) {
+                buffer_pool_.UnpinPage(last_pid, true);
+                return true;
+            }
+        }
+        if (page) {
+            buffer_pool_.UnpinPage(last_pid, false);
+        }
+    }
+
+    // Allocate a fresh page, write empty to disk, then fetch through BufferPool
+    PageId new_pid = page_mgr_.allocatePage(file_id);
+    if (!new_pid.isValid()) return false;
+
+    Page empty_page(new_pid, PageType::DATA_PAGE);
+    if (!page_mgr_.writePage(new_pid, empty_page)) return false;
+
+    Page* page = buffer_pool_.FetchPage(new_pid);
+    if (!page) return false;
+
+    auto slot = page->insertRecord(serialized.data(), row_size);
+    if (!slot.has_value()) {
+        buffer_pool_.UnpinPage(new_pid, false);
+        return false;  // row larger than a single page
+    }
+    buffer_pool_.UnpinPage(new_pid, true);
+    return true;
+}
+
+bool StorageManager::insertRow(const std::string& table_name,
+                               const Row& row,
+                               const Schema& schema) {
+    auto it = file_ids_.find(table_name);
+    if (it == file_ids_.end()) return false;
+
+    auto serialized = RowSerializer::serialize(row, schema);
+    auto row_size = static_cast<uint16_t>(serialized.size());
+    return insertRowInternal(it->second, serialized, row_size);
+}
+
+bool StorageManager::updateRow(TID tid, const Row& new_row, const Schema& schema) {
+    auto serialized = RowSerializer::serialize(new_row, schema);
+    auto row_size = static_cast<uint16_t>(serialized.size());
+
+    PageId pid(tid.file_id, tid.page_num);
+    Page* page = buffer_pool_.FetchPage(pid);
+    if (!page) return false;
+
+    // Delete old slot
+    page->deleteRecord(tid.slot_id);
+
+    // Try to fit updated data on the same page
+    if (page->freeSpace() >= row_size + Page::SLOT_SIZE) {
+        auto slot = page->insertRecord(serialized.data(), row_size);
+        if (slot.has_value()) {
+            buffer_pool_.UnpinPage(pid, true);
+            return true;
+        }
+    }
+
+    // Doesn't fit — mark page dirty (delete applied) and insert elsewhere
+    buffer_pool_.UnpinPage(pid, true);
+    return insertRowInternal(tid.file_id, serialized, row_size);
+}
+
+bool StorageManager::deleteRow(TID tid) {
+    PageId pid(tid.file_id, tid.page_num);
+    Page* page = buffer_pool_.FetchPage(pid);
+    if (!page) return false;
+
+    page->deleteRecord(tid.slot_id);
+    buffer_pool_.UnpinPage(pid, true);
+    return true;
+}
+
+std::unique_ptr<TableIterator> StorageManager::createIterator(
+        const std::string& table_name) {
+    auto fit = file_ids_.find(table_name);
+    if (fit == file_ids_.end()) return nullptr;
+
+    auto sit = schemas_.find(table_name);
+    if (sit == schemas_.end()) return nullptr;
+
+    uint32_t file_id = fit->second;
+    uint32_t total_pages = page_mgr_.pageCount(file_id);
+
+    return std::make_unique<HeapTableIterator>(
+        file_id, total_pages, buffer_pool_, sit->second);
+}
+
+uint32_t StorageManager::pageCount(const std::string& table_name) const {
+    auto it = file_ids_.find(table_name);
+    if (it == file_ids_.end()) return 0;
+    return page_mgr_.pageCount(it->second);
 }
 
 }  // namespace seeddb

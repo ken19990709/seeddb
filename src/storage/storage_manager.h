@@ -1,14 +1,19 @@
 #ifndef SEEDDB_STORAGE_STORAGE_MANAGER_H
 #define SEEDDB_STORAGE_STORAGE_MANAGER_H
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 
+#include "common/config.h"
+#include "storage/buffer/buffer_pool.h"
 #include "storage/catalog.h"
 #include "storage/page_manager.h"
 #include "storage/row.h"
 #include "storage/schema.h"
 #include "storage/table.h"
+#include "storage/tid.h"
+#include "storage/table_iterator.h"
 
 namespace seeddb {
 
@@ -43,9 +48,12 @@ public:
     // Constructor
     // =========================================================================
 
-    /// Constructs a StorageManager rooted at @p data_dir.
-    /// The directory is created if it does not already exist.
-    explicit StorageManager(const std::string& data_dir);
+    // New Config-based constructor
+    StorageManager(const std::string& data_dir, const Config& config);
+
+    /// Compatibility constructor. Remove when executor switches to new API.
+    explicit StorageManager(const std::string& data_dir)
+        : StorageManager(data_dir, Config{}) {}
 
     // Non-copyable
     StorageManager(const StorageManager&)            = delete;
@@ -92,6 +100,25 @@ public:
     /// @return true on success.
     bool checkpoint(const std::string& table_name, const Table& table);
 
+    // =========================================================================
+    // New disk-based API
+    // =========================================================================
+
+    /// Creates an iterator for scanning all rows of a table via BufferPool.
+    std::unique_ptr<TableIterator> createIterator(const std::string& table_name);
+
+    /// Inserts a row into a table via BufferPool.
+    bool insertRow(const std::string& table_name, const Row& row, const Schema& schema);
+
+    /// Updates a row in-place (delete old slot + re-insert new data).
+    bool updateRow(TID tid, const Row& new_row, const Schema& schema);
+
+    /// Marks a row as deleted.
+    bool deleteRow(TID tid);
+
+    /// Returns the number of pages in a table's file.
+    uint32_t pageCount(const std::string& table_name) const;
+
 private:
     // =========================================================================
     // Internal helpers
@@ -112,12 +139,16 @@ private:
                                    const Schema& schema,
                                    uint32_t file_id);
 
+    /// Internal insert that takes file_id directly.
+    bool insertRowInternal(uint32_t file_id, const std::vector<char>& serialized, uint16_t row_size);
+
     // =========================================================================
     // Data members
     // =========================================================================
 
     std::string   data_dir_;                              ///< Root data directory.
     PageManager   page_mgr_;                              ///< Page I/O subsystem.
+    BufferPool    buffer_pool_;                           ///< In-memory page cache.
     std::unordered_map<std::string, Schema>   schemas_;   ///< Cached table schemas.
     std::unordered_map<std::string, uint32_t> file_ids_;  ///< table_name → file_id.
 };
