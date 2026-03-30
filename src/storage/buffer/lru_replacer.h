@@ -3,7 +3,7 @@
 
 #include "storage/buffer/frame.h"
 
-#include <cstddef>
+#include <memory>
 #include <unordered_map>
 
 namespace seeddb {
@@ -29,7 +29,7 @@ namespace seeddb {
 class LruReplacer {
 public:
     /// @param pool_size  Total number of frames managed.
-    /// @param old_pct    Percentage of frames in the old sublist (0–100).
+    /// @param old_pct    Percentage of frames in the old sublist (5–95, clamped).
     explicit LruReplacer(size_t pool_size, int old_pct);
     ~LruReplacer();
 
@@ -50,6 +50,7 @@ public:
     void Access(frame_id_t frame_id);
 
     /// Choose a victim from the old tail.
+    /// Falls back to young tail if old sublist is empty.
     /// @param[out] frame_id  The evicted frame id.
     /// @return false if all frames are pinned (no candidates).
     bool Evict(frame_id_t* frame_id);
@@ -62,13 +63,14 @@ private:
         frame_id_t frame_id{INVALID_FRAME_ID};
         Node* prev{nullptr};
         Node* next{nullptr};
+        bool in_old{false};
     };
 
     /// Unlinks @p node from the list (does not delete).
     void unlink(Node* node);
 
     /// Inserts @p node immediately after @p pos.
-    void insertAfter(Node* pos, Node* node);
+    void insertAfter(Node* pos, Node* node, bool mark_old);
 
     /// If old_size_ > target_old_size_, demote the oldest young frame.
     void rebalance();
@@ -77,7 +79,7 @@ private:
     Node sentinel_tail_;   ///< Dummy tail (after all old frames).
     Node midpoint_;        ///< Boundary sentinel between young and old.
 
-    std::unordered_map<frame_id_t, Node*> nodes_;  ///< frame_id → list node.
+    std::unordered_map<frame_id_t, std::unique_ptr<Node>> nodes_;  ///< frame_id → list node.
 
     size_t pool_size_;
     size_t target_old_size_;   ///< Desired number of old-sublist frames.

@@ -97,7 +97,8 @@ private:
     /// Load @p page_id from disk into @p frame_id.
     /// Acquires write latch on the frame during I/O.
     /// Caller must hold latch_ when entering; latch_ is released during I/O.
-    void loadPage(frame_id_t frame_id, PageId page_id);
+    /// @return true on success, false on I/O error.
+    bool loadPage(frame_id_t frame_id, PageId page_id);
 
     /// Flush the frame to disk if dirty.  Caller must hold latch_.
     void flushFrame(frame_id_t frame_id);
@@ -107,7 +108,7 @@ private:
     // =========================================================================
 
     PageManager&    page_manager_;
-    size_t          pool_size_;
+    const size_t    pool_size_;
 
     std::vector<Frame>                          frames_;      ///< frame_id → Frame
     std::unordered_map<PageId, frame_id_t>      page_table_;  ///< PageId → frame_id

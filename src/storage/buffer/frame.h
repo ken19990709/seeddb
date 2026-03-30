@@ -14,6 +14,13 @@ namespace seeddb {
 using frame_id_t = uint32_t;
 constexpr frame_id_t INVALID_FRAME_ID = UINT32_MAX;
 
+/// Lifecycle state of a buffer frame.
+enum class FrameState : uint8_t {
+    Empty,    ///< Never used
+    Loading,  ///< Being loaded from disk (invisible to other threads)
+    Ready,    ///< Available for normal use
+};
+
 // =============================================================================
 // Frame — one slot in the buffer pool
 // =============================================================================
@@ -25,7 +32,7 @@ constexpr frame_id_t INVALID_FRAME_ID = UINT32_MAX;
 //   - pin_count / is_dirty are atomics: safe to read without the global latch.
 //   - latch (shared_mutex): protects page *content*.
 //     Callers must hold a read or write latch while accessing page data.
-//   - All metadata mutations (page_id, valid, pin_count) happen under the
+//   - All metadata mutations (page_id, state, pin_count) happen under the
 //     BufferPool's global mutex (latch_).
 // =============================================================================
 struct Frame {
@@ -33,7 +40,7 @@ struct Frame {
     PageId               page_id;           ///< Which page is currently loaded.
     std::atomic<int>     pin_count{0};      ///< Reference count; >0 → not evictable.
     std::atomic<bool>    is_dirty{false};   ///< Modified since last flush?
-    bool                 valid{false};      ///< True if a page has been loaded.
+    FrameState           state{FrameState::Empty}; ///< Lifecycle state.
     std::shared_mutex    latch;             ///< Readers-writer lock for page content.
 
     // Non-copyable because shared_mutex is non-copyable.
