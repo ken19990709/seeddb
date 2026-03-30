@@ -227,3 +227,130 @@ TEST_CASE("HeapTableIterator - TID tracking across pages", "[table_iterator]") {
 
     REQUIRE_FALSE(iter.next());
 }
+
+// =============================================================================
+// Edge case tests — Section 7 robustness
+// =============================================================================
+
+TEST_CASE("HeapTableIterator - all slots deleted returns no rows",
+          "[table_iterator]") {
+    IterFixture fix;
+
+    // Create a page with 3 rows, delete all
+    PageId pid = fix.page_mgr->allocatePage(fix.file_id);
+    Page page(pid, seeddb::PageType::DATA_PAGE);
+    for (int i = 0; i < 3; ++i) {
+        Row row = makeIterRow(i, "row" + std::to_string(i));
+        auto data = seeddb::RowSerializer::serialize(row, fix.schema);
+        page.insertRecord(data.data(), static_cast<uint16_t>(data.size()));
+    }
+    page.deleteRecord(0);
+    page.deleteRecord(1);
+    page.deleteRecord(2);
+    fix.page_mgr->writePage(pid, page);
+
+    auto iter = seeddb::HeapTableIterator(fix.file_id, 1, *fix.pool, fix.schema);
+    REQUIRE_FALSE(iter.next());
+}
+
+TEST_CASE("HeapTableIterator - single row insert-delete-insert cycle",
+          "[table_iterator]") {
+    IterFixture fix;
+
+    // Page 0: one row
+    PageId pid = fix.page_mgr->allocatePage(fix.file_id);
+    Page page(pid, seeddb::PageType::DATA_PAGE);
+    Row row1 = makeIterRow(1, "first");
+    auto data1 = seeddb::RowSerializer::serialize(row1, fix.schema);
+    auto slot1 = page.insertRecord(data1.data(), static_cast<uint16_t>(data1.size()));
+    REQUIRE(slot1.has_value());
+
+    // Delete it, then insert a new row (gets a new slot)
+    page.deleteRecord(*slot1);
+    Row row2 = makeIterRow(2, "second");
+    auto data2 = seeddb::RowSerializer::serialize(row2, fix.schema);
+    auto slot2 = page.insertRecord(data2.data(), static_cast<uint16_t>(data2.size()));
+    REQUIRE(slot2.has_value());
+
+    fix.page_mgr->writePage(pid, page);
+
+    auto iter = seeddb::HeapTableIterator(fix.file_id, 1, *fix.pool, fix.schema);
+
+    // Should find exactly one live row
+    REQUIRE(iter.next());
+    REQUIRE(iter.currentRow().get(0).asInt32() == 2);
+    REQUIRE(iter.currentRow().get(1).asString() == "second");
+    REQUIRE(iter.currentTID().slot_id == *slot2);
+
+    REQUIRE_FALSE(iter.next());
+}
+
+TEST_CASE("HeapTableIterator - many pages with small buffer pool",
+          "[table_iterator]") {
+    // Use a dedicated fixture with a 3-frame buffer pool
+    static int counter = 0;
+    std::string dir = fs::temp_directory_path().string() + "/seeddb_iter_many_" +
+                      std::to_string(++counter);
+    fs::create_directories(dir);
+
+    seeddb::Config config;
+    config.set("buffer_pool_size", "3");
+
+    auto page_mgr = std::make_unique<seeddb::PageManager>(dir);
+    auto pool = std::make_unique<seeddb::BufferPool>(*page_mgr, config);
+    Schema schema = makeIterSchema();
+
+    uint32_t file_id = page_mgr->createTableFile("many_pages");
+
+    // Create 10 pages, 5 rows each = 50 rows total
+    const int num_pages = 10;
+    const int rows_per_page = 5;
+    for (int p = 0; p < num_pages; ++p) {
+        PageId pid = page_mgr->allocatePage(file_id);
+        Page page(pid, seeddb::PageType::DATA_PAGE);
+        for (int r = 0; r < rows_per_page; ++r) {
+            int id = p * rows_per_page + r;
+            Row row = makeIterRow(id, "p" + std::to_string(p) + "_r" + std::to_string(r));
+            auto data = seeddb::RowSerializer::serialize(row, schema);
+            page.insertRecord(data.data(), static_cast<uint16_t>(data.size()));
+        }
+        page_mgr->writePage(pid, page);
+    }
+
+    // Iterate with only 3 buffer frames — should evict and reload pages
+    auto iter = seeddb::HeapTableIterator(file_id, num_pages, *pool, schema);
+    int count = 0;
+    int last_id = -1;
+    while (iter.next()) {
+        int id = iter.currentRow().get(0).asInt32();
+        REQUIRE(id > last_id);  // Rows should be in insertion order
+        last_id = id;
+        count++;
+    }
+    REQUIRE(count == num_pages * rows_per_page);  // 50
+
+    pool.reset();
+    page_mgr.reset();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("HeapTableIterator - calling currentRow before next returns default",
+          "[table_iterator]") {
+    IterFixture fix;
+    fix.writePageWithRows({makeIterRow(1, "Alice")});
+
+    auto iter = seeddb::HeapTableIterator(fix.file_id, 1, *fix.pool, fix.schema);
+    // currentRow() before any next() — should return default-constructed Row
+    const Row& row = iter.currentRow();
+    REQUIRE(row.size() == 0);
+}
+
+TEST_CASE("HeapTableIterator - currentTID before next returns invalid TID",
+          "[table_iterator]") {
+    IterFixture fix;
+    fix.writePageWithRows({makeIterRow(1, "Alice")});
+
+    auto iter = seeddb::HeapTableIterator(fix.file_id, 1, *fix.pool, fix.schema);
+    TID tid = iter.currentTID();
+    REQUIRE_FALSE(tid.isValid());
+}
