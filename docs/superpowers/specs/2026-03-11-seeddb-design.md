@@ -427,48 +427,142 @@ LIMIT 10;
 
 ---
 
-### Phase 3: B+ 树存储引擎（6 周）
+### Phase 3: B+ 树存储引擎（8-9 周）
 
-#### 3.1 页面管理（1 周）
+> **设计理念**：先完成页面管理和 Buffer Pool 基础设施，再通过磁盘化查询执行让索引能真正发挥作用，最后实现 B+ 树索引
+
+#### 3.1 页面管理（1 周）✅ 已完成
+
+> **完成日期**: 2026-03-24
+
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| D3-1 Page ID 设计 | 0.5 天 | 页面唯一标识 (file_id, page_num) | ✅ |
+| D3-2 Page Header | 0.5 天 | 64 字节页头：页号、空闲空间、槽位数、LSN、prev/next 指针 | ✅ |
+| D3-3 Slotted Page 格式 | 2 天 | PostgreSQL 风格变长数据存储，槽位数组 (pd_lower/pd_upper) | ✅ |
+| D3-4 页面读写 | 1 天 | 页面序列化/反序列化 (4KB PAGE_SIZE) | ✅ |
+| D3-5 磁盘文件管理 | 1 天 | DiskManager: 文件打开/关闭，页面读写，空闲页复用 | ✅ |
+
+**里程碑验证**：页面管理测试全部通过 (71 test cases) ✅
+
+#### 3.2 Buffer Pool（2 周）✅ 已完成
+
+> **完成日期**: 2026-03-24
+> **详细设计**: [2026-03-24-buffer-pool-design.md](2026-03-24-buffer-pool-design.md)
+
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| B3-1 Frame 定义 | 0.5 天 | Buffer Pool 中的页帧 (page + metadata + latch) | ✅ |
+| B3-2 Buffer Pool 框架 | 1 天 | 固定大小的页面缓存池 (可配置 buffer_pool_size) | ✅ |
+| B3-3 页面获取 (FetchPage) | 1 天 | 从磁盘读取页面到内存，Loading 状态防止并发竞争 | ✅ |
+| B3-4 页面刷盘 (FlushPage) | 1 天 | 脏页写回磁盘，支持 FlushAll | ✅ |
+| B3-5 LRU 替换策略 | 2 天 | InnoDB 风格 midpoint insertion (young/old sublists) | ✅ |
+| B3-6 Pin/Unpin 机制 | 1 天 | 原子引用计数，pin_count > 0 防止淘汰 | ✅ |
+| B3-7 页面锁 (PageLatch) | 1 天 | shared_mutex 读写锁，RLatch/WLatch API | ✅ |
+| B3-8 Buffer Pool 并发测试 | 1 天 | 多线程访问测试通过 (19 test cases) | ✅ |
+
+**里程碑验证**：Buffer Pool 测试全部通过 (237 assertions in 19 test cases) ✅
+
+#### 3.3 磁盘化查询执行（2 周）📋 计划中
+
+> **设计理念**：当前 Executor 直接操作内存中的 Table::rows_ 向量，索引无法发挥 I/O 优化作用。
+> 本阶段将查询执行层与 Buffer Pool 集成，实现真正的磁盘化数据访问。
+
+##### 3.3.1 问题分析
+
+当前架构限制：
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 当前架构 (内存化)                                            │
+│                                                              │
+│   Startup: StorageManager::load()                           │
+│            ↓                                                 │
+│   All pages → deserialize → Table::rows_ (全部加载到内存)     │
+│            ↓                                                 │
+│   Executor: for (row : table.rows_) { ... }  (内存迭代)      │
+│            ↓                                                 │
+│   Mutation: table.insert() / table.update()  (内存修改)      │
+│            ↓                                                 │
+│   Persist:  checkpoint() → 全表重写磁盘                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+目标架构：
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 目标架构 (磁盘化)                                            │
+│                                                              │
+│   Startup: 仅加载 catalog.meta (表结构)                       │
+│            ↓                                                 │
+│   Executor: TableIterator → BufferPool::FetchPage()         │
+│            ↓                 (按需加载页面)                   │
+│   Mutation: 直接修改 Page → mark dirty                        │
+│            ↓                                                 │
+│   Persist:  BufferPool::FlushAll() (仅脏页写回)               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+##### 3.3.2 任务分解
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| D3-1 Page ID 设计 | 0.5 天 | 页面唯一标识 |
-| D3-2 Page Header | 0.5 天 | 页头：页号、空闲空间、槽位数 |
-| D3-3 Slotted Page 格式 | 2 天 | 变长数据存储，槽位数组 |
-| D3-4 页面读写 | 1 天 | 页面序列化/反序列化 |
-| D3-5 磁盘文件管理 | 1 天 | 文件打开/关闭，页面读写 |
+| T3-1 TableIterator 接口设计 | 0.5 天 | 定义 begin/next/end/currentRow 接口 |
+| T3-2 HeapTableIterator 实现 | 2 天 | 通过 BufferPool 逐页读取，按 slot 迭代 |
+| T3-3 Executor 改造 - SELECT | 1.5 天 | executeSelect 使用 TableIterator 替代 table.rows_ |
+| T3-4 Executor 改造 - UPDATE/DELETE | 1.5 天 | 定位修改使用 Iterator，原地更新 Page |
+| T3-5 去除全量加载 | 1 天 | StorageManager::load() 仅加载 schema，不加载 rows |
+| T3-6 移除 Table::rows_ | 1 天 | Table 类仅保留 schema，无内存行存储 |
+| T3-7 增量 INSERT | 1 天 | 直接通过 BufferPool 追加到页面，标记 dirty |
+| T3-8 增量 UPDATE/DELETE | 1.5 天 | 原地修改页面记录，无需全表重写 |
+| T3-9 集成测试 | 1 天 | 大数据量测试 (10万行+)，内存占用验证 |
 
-#### 3.2 Buffer Pool（2 周）
+**里程碑验证**：
+- 插入 10 万行数据，内存占用保持在 buffer_pool_size 范围内
+- SELECT/UPDATE/DELETE 通过 BufferPool 执行，不全量加载
+- 重启后数据完整性验证
+
+##### 3.3.3 关键设计决策
+
+| 决策点 | 选择 | 原因 |
+|--------|------|------|
+| Iterator 模式 | Volcano-style (next()) | 与后续向量化兼容，教育价值高 |
+| 原地更新策略 | Slot 复用 + Compaction | 简化实现，避免引入复杂的版本链 |
+| 删除策略 | 标记删除 + 后台回收 | 延迟回收，减少写放大 |
+| Table 类角色 | 仅保留 schema metadata | 移除 rows_ 向量，真正磁盘化 |
+
+#### 3.4 索引目录扩展（0.5 周）📋 计划中
+
+> **设计理念**：为 B+ 树索引准备元数据基础设施
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| B3-1 Frame 定义 | 0.5 天 | Buffer Pool 中的页帧 |
-| B3-2 Buffer Pool 框架 | 1 天 | 固定大小的页面缓存池 |
-| B3-3 页面获取 (FetchPage) | 1 天 | 从磁盘读取页面到内存 |
-| B3-4 页面刷盘 (FlushPage) | 1 天 | 脏页写回磁盘 |
-| B3-5 LRU 替换策略 | 2 天 | 淘汰最久未使用的页面 |
-| B3-6 Pin/Unpin 机制 | 1 天 | 引用计数，防止淘汰 |
-| B3-7 页面锁 (PageLatch) | 1 天 | 读写锁，并发访问控制 |
-| B3-8 Buffer Pool 并发测试 | 1 天 | 多线程访问测试通过 |
+| C3-1 IndexSchema 定义 | 0.5 天 | 索引名、表名、列列表、唯一性标志 |
+| C3-2 Catalog 扩展 | 0.5 天 | createIndex/dropIndex/getIndex API |
+| C3-3 catalog.meta 格式扩展 | 0.5 天 | 持久化索引定义 |
+| C3-4 CREATE INDEX 解析 | 0.5 天 | Parser 支持 `CREATE INDEX idx ON t(col)` |
+| C3-5 DROP INDEX 解析 | 0.5 天 | Parser 支持 `DROP INDEX idx` |
 
-#### 3.3 B+ 树（3 周）
+**里程碑验证**：能解析并持久化索引定义，重启后索引元数据完整
+
+#### 3.5 B+ 树（3 周）📋 计划中
 
 | 任务 | 预计 | 验证标准 |
 |------|------|----------|
-| I3-1 B+ 树节点定义 | 1 天 | InternalNode, LeafNode |
-| I3-2 节点搜索 | 1 天 | 在节点内查找键 |
+| I3-1 B+ 树节点定义 | 1 天 | InternalNode, LeafNode (基于 Page) |
+| I3-2 节点搜索 | 1 天 | 在节点内二分查找键 |
 | I3-3 叶子节点插入 | 2 天 | 插入键值对，无分裂 |
-| I3-4 节点分裂 | 2 天 | 节点满时分裂 |
+| I3-4 节点分裂 | 2 天 | 节点满时分裂，通过 BufferPool 分配新页 |
 | I3-5 内部节点插入 | 2 天 | 插入子节点指针 |
-| I3-6 B+ 树查找 | 1 天 | 从根到叶子查找 |
+| I3-6 B+ 树查找 | 1 天 | 从根到叶子查找，通过 BufferPool 访问 |
 | I3-7 B+ 树插入 | 2 天 | 完整插入流程（含分裂） |
 | I3-8 B+ 树删除 | 2 天 | 删除 + 合并（简化版） |
-| I3-9 范围扫描 | 1 天 | 叶子节点链表遍历 |
-| I3-10 B+ 树并发控制 | 2 天 | crabbing 协议 |
+| I3-9 范围扫描 | 1 天 | 叶子节点链表遍历 (prev_page/next_page) |
+| I3-10 B+ 树并发控制 | 2 天 | crabbing 协议 (利用 PageLatch) |
 | I3-11 B+ 树集成测试 | 1 天 | 大量数据插入/查询测试 |
 
-**里程碑验证**：数据持久化到磁盘，重启后数据不丢失
+**里程碑验证**：
+- 数据持久化到磁盘，重启后数据不丢失
+- 索引查找性能优于全表扫描 (10万行表，点查 < 10ms)
 
 ---
 
@@ -572,18 +666,69 @@ LIMIT 10;
 
 ### Phase 7: 高级功能（持续演进）
 
-| 功能 | 预计 | 验证标准 |
-|------|------|----------|
-| 子查询 (标量) | 1 周 | `SELECT (SELECT MAX(b) FROM t2) FROM t1` |
-| 子查询 (IN/EXISTS) | 1.5 周 | `SELECT * FROM t WHERE a IN (SELECT b FROM s)` |
-| 子查询 (FROM 子句) | 1 周 | `SELECT * FROM (SELECT a, b FROM t) AS sub` |
-| Hash Join 优化 | 1 周 | 大表 JOIN 性能优化 |
-| 索引扫描优化 | 1 周 | 使用 B+ 树索引加速 WHERE 条件 |
-| 简单查询优化器 | 2 周 | 基于规则的查询重写 (谓词下推、常量折叠) |
-| UNION/INTERSECT/EXCEPT | 1 周 | 集合操作 |
-| 窗口函数基础 | 2 周 | `ROW_NUMBER() OVER (ORDER BY a)` |
-| CREATE INDEX | 1 周 | `CREATE INDEX idx ON t(a)` |
-| 日期时间函数 | 1 周 | `NOW()`, `DATE_ADD`, `DATE_FORMAT` |
+> **2026-03-30 更新**：基于 SQL 完整性差距分析，按投入产出比分阶段推进
+
+#### 7.1 SQL 完整性补全（3-4 周）
+
+> **前置依赖**：Phase 3.3 磁盘化查询执行完成
+> **目标**：补齐 SQL 功能短板，覆盖常见业务场景
+
+| 任务 | 预计 | 验证标准 | 优先级 |
+|------|------|----------|--------|
+| 子查询 (WHERE EXISTS/IN) | 1.5 周 | `SELECT * FROM t WHERE a IN (SELECT b FROM s)` | P0 |
+| 子查询 (FROM 子句) | 1 周 | `SELECT * FROM (SELECT a, b FROM t) AS sub` | P0 |
+| 子查询 (标量) | 1 周 | `SELECT (SELECT MAX(b) FROM t2) FROM t1` | P0 |
+| 约束 (PRIMARY KEY) | 1 周 | 自动创建唯一索引 + 唯一性校验 | P0 |
+| 约束 (UNIQUE/DEFAULT/CHECK) | 1 周 | 插入时校验约束、DEFAULT 值填充 | P1 |
+| 约束 (FOREIGN KEY) | 1.5 周 | 引用完整性校验 + 级联操作 | P1 |
+| CAST() 完整实现 | 0.5 天 | `CAST(a AS INTEGER)`, 隐式转换规则 | P1 |
+| ALTER TABLE | 1 周 | ADD/DROP/RENAME COLUMN, 修改数据类型 | P1 |
+| VIEW | 1 周 | CREATE VIEW / DROP VIEW, 查询重写 | P1 |
+| UNION / INTERSECT / EXCEPT | 1 周 | 含 UNION ALL，集合运算语义正确 | P1 |
+| CTE (WITH ... AS) | 1 周 | 非递归 CTE，查询可读性提升 | P1 |
+
+#### 7.2 查询优化与性能（3-4 周）
+
+> **前置依赖**：Phase 3.5 B+ 树索引完成
+> **目标**：从"能跑"到"跑得快"
+
+| 任务 | 预计 | 验证标准 | 优先级 |
+|------|------|----------|--------|
+| Hash JOIN 实现 | 1 周 | 大表 JOIN 性能提升 10x+ | P0 |
+| Sort-Merge JOIN 实现 | 1 周 | 有序数据 JOIN 场景优化 | P1 |
+| LEFT/RIGHT JOIN 执行完善 | 1 周 | NULL 填充语义正确，含多表外连接 | P0 |
+| FULL OUTER JOIN | 0.5 天 | 两侧 NULL 填充 | P2 |
+| 索引扫描集成 | 1 周 | WHERE 条件自动选择索引 vs 全表扫描 | P0 |
+| EXPLAIN 命令 | 1 周 | 显示查询计划树（访问方式、预估行数） | P1 |
+| 基于规则优化器 | 2 周 | 谓词下推、常量折叠、投影裁剪 | P1 |
+| 查询结果缓存 | 1 周 | 相同查询直接返回缓存 | P2 |
+
+#### 7.3 分析与高级特性（2-3 周）
+
+> **前置依赖**：7.1 子查询完成
+> **目标**：支持分析型查询场景
+
+| 任务 | 预计 | 验证标准 | 优先级 |
+|------|------|----------|--------|
+| 窗口函数基础 | 2 周 | ROW_NUMBER / RANK / SUM() OVER (ORDER BY / PARTITION BY) | P1 |
+| 日期时间类型 | 1 周 | DATE / TIMESTAMP / INTERVAL, NOW() / DATE_ADD 等 | P1 |
+| 递归 CTE | 1 周 | WITH RECURSIVE, 层级数据查询 | P2 |
+| ANY / ALL 量词 | 0.5 天 | `> ALL (SELECT ...)`, `= ANY (...)` | P2 |
+
+#### 7.4 远期规划
+
+> 无明确时间线，按需推进
+
+| 任务 | 说明 |
+|------|------|
+| Prepared Statement | 参数化查询 (?占位符)，防 SQL 注入 + 执行计划复用 |
+| 向量化执行 | 列式批处理，利用 CPU Cache Line |
+| 存储过程 / 函数 | CREATE FUNCTION / CREATE PROCEDURE |
+| 触发器 | BEFORE/AFTER INSERT/UPDATE/DELETE |
+| JSON 类型 | JSON 解析、路径查询 (jsonb 风格) |
+| Array 类型 | PostgreSQL 风格数组 |
+| 物化视图 | 自动/手动刷新的缓存结果集 |
+| 查询并行 | 并行扫描、并行 JOIN (多线程执行算子) |
 
 ---
 
@@ -675,6 +820,84 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 | **类型转换** | CAST |
 | **聚合** | COUNT, SUM, AVG, MIN, MAX |
 
+### 5.8 SQL 完整性差距分析（2026-03-30 更新）
+
+> 对比 PostgreSQL/SQLite/MySQL，梳理 SeedDB 当前 SQL 能力边界
+
+#### 5.8.1 已实现能力矩阵
+
+| 特性 | SeedDB | SQLite | PostgreSQL |
+|------|--------|--------|------------|
+| 基础 DML (CRUD) | ✅ | ✅ | ✅ |
+| WHERE 条件 | ✅ | ✅ | ✅ |
+| ORDER BY / LIMIT / OFFSET | ✅ | ✅ | ✅ |
+| DISTINCT | ✅ | ✅ | ✅ |
+| GROUP BY / HAVING / 聚合 | ✅ | ✅ | ✅ |
+| CASE WHEN / IN / BETWEEN / LIKE | ✅ | ✅ | ✅ |
+| COALESCE / NULLIF | ✅ | ✅ | ✅ |
+| INNER / LEFT / RIGHT JOIN (Parser) | ✅ | ✅ | ✅ |
+| 内置标量函数 (字符串/数学) | ✅ | ✅ | ✅ |
+| NULL 三值逻辑 | ✅ | ✅ | ✅ |
+| 列别名 / 表别名 | ✅ | ✅ | ✅ |
+
+#### 5.8.2 缺失功能清单（按优先级排序）
+
+**🔴 P0 — 核心缺失（生产必需）**
+
+| 缺失 | 说明 | PostgreSQL/MySQL 做法 |
+|------|------|----------------------|
+| 索引结构 | 所有查询均为全表扫描 O(n) | B+Tree/Hash/GiST 多种索引 |
+| 事务 (ACID) | 无 BEGIN/COMMIT/ROLLBACK | WAL + 锁/MVCC |
+| WAL / 崩溃恢复 | 无持久化保证 | ARIES 风格 redo/undo |
+| 约束 | 仅 NOT NULL，无 PK/FK/UNIQUE/DEFAULT/CHECK | 完整约束系统 |
+| 子查询 | WHERE/FROM/SELECT 中均不支持嵌套 SELECT | 完整子查询支持 |
+| LEFT/RIGHT JOIN 执行 | Parser 支持但 Executor 仅实现 Nested Loop | 多种 JOIN 算法 |
+
+**🟡 P1 — 重要缺失（功能完整性）**
+
+| 缺失 | 说明 |
+|------|------|
+| Set Operations | UNION / UNION ALL / INTERSECT / EXCEPT |
+| CTE (WITH) | Common Table Expressions，复杂查询的组织方式 |
+| 窗口函数 | ROW_NUMBER / RANK / SUM() OVER (...) |
+| ALTER TABLE | 无法修改已有表结构 (ADD/DROP/RENAME COLUMN) |
+| VIEW | CREATE VIEW / DROP VIEW |
+| 日期时间类型 | DATE / TIME / TIMESTAMP — 业务系统最常用类型 |
+| CAST() 完整实现 | F2-19 待实现，类型转换规则不完整 |
+| Hash/Merge Join | 仅 Nested Loop，大表 JOIN 性能差 |
+| FULL OUTER JOIN | Parser 和 Executor 均未实现 |
+
+**🟢 P2 — 锦上添花（高级特性）**
+
+| 缺失 | 说明 |
+|------|------|
+| EXPLAIN / EXPLAIN ANALYZE | 查询计划可视化 |
+| Prepared Statement | 参数化查询，防 SQL 注入 |
+| 存储过程 / 触发器 | 服务端逻辑 |
+| JSON / Array 类型 | 半结构化数据支持 |
+| NATURAL JOIN / USING | 简化 JOIN 语法 |
+| 递归 CTE | 层级数据查询 |
+| ANY / ALL 量词 | `> ALL (SELECT ...)` |
+| 逻辑视图 / 物化视图 | 查询复用与性能优化 |
+
+#### 5.8.3 执行器能力评估
+
+| 执行能力 | 状态 | 备注 |
+|----------|------|------|
+| 全表扫描 | ✅ | 内存迭代模式 |
+| WHERE 过滤 | ✅ | 支持复杂布尔表达式 |
+| 投影 (列选择) | ✅ | 含表达式计算 |
+| 排序 (ORDER BY) | ✅ | 多列 ASC/DESC |
+| 去重 (DISTINCT) | ✅ | 基于值比较 |
+| 聚合 (GROUP BY) | ✅ | Hash 分组 + HAVING 过滤 |
+| 嵌套循环 JOIN | ✅ | 唯一 JOIN 算法 |
+| 左/右外连接 | ⚠️ | Parser 支持，Executor 未完整实现 |
+| Hash JOIN | ❌ | 大表场景性能关键 |
+| Merge JOIN | ❌ | 有序数据场景优化 |
+| 子查询执行 | ❌ | 完全不支持 |
+| 索引扫描 | ❌ | 依赖 B+ 树实现 |
+| 向量化执行 | ❌ | 预留接口，未实现 |
+
 ---
 
 ## 6. 参考资源
@@ -731,11 +954,18 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 | Phase 2.3 | 表达式增强 (CASE WHEN/IN/BETWEEN/LIKE/COALESCE/NULLIF) | ✅ 完成 | 2026-03-19 |
 | Phase 2.4 | 内置函数 (LENGTH/UPPER/LOWER/TRIM/SUBSTRING/CONCAT/ABS/ROUND/CEIL/FLOOR/MOD) | ✅ 完成 | 2026-03-22 |
 | Phase 2.5 | 基础 JOIN 支持 (CROSS/INNER/LEFT/RIGHT) | ✅ 完成 | 2026-03-24 |
-| Phase 3 | B+ 树存储引擎 | 📋 计划中 | - |
+| Phase 3.1 | 页面管理 (PageID/PageHeader/SlottedPage/DiskManager) | ✅ 完成 | 2026-03-24 |
+| Phase 3.2 | Buffer Pool (LRU/Pin/Unpin/PageLatch) | ✅ 完成 | 2026-03-24 |
+| Phase 3.3 | 磁盘化查询执行 (TableIterator/增量持久化) | 📋 计划中 | - |
+| Phase 3.4 | 索引目录扩展 (IndexSchema/CREATE INDEX) | 📋 计划中 | - |
+| Phase 3.5 | B+ 树索引 | 📋 计划中 | - |
 | Phase 4 | 基础恢复机制 (WAL) | 📋 计划中 | - |
 | Phase 5 | 多线程 + PostgreSQL 协议 | 📋 计划中 | - |
 | Phase 6 | 完整事务系统 (MVCC) | 📋 计划中 | - |
-| Phase 7 | 高级功能 (子查询/窗口函数等) | 📋 计划中 | - |
+| Phase 7.1 | SQL 完整性补全 (子查询/约束/ALTER/VIEW/CTE) | 📋 计划中 | - |
+| Phase 7.2 | 查询优化与性能 (Hash JOIN/索引扫描/EXPLAIN/优化器) | 📋 计划中 | - |
+| Phase 7.3 | 分析与高级特性 (窗口函数/日期时间/递归CTE) | 📋 计划中 | - |
+| Phase 7.4 | 远期规划 (Prepared Stmt/向量化/JSON/存储过程) | 📋 远期 | - |
 
 ## 9. 下一步行动
 
@@ -750,9 +980,17 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 9. ~~**当前目标**：Phase 2.2 - 聚合与分组 (COUNT/SUM/AVG/MIN/MAX/GROUP BY/HAVING)~~ ✅ 已完成
 10. ~~**当前目标**：Phase 2.4 - 内置函数 (字符串/数学/类型转换)~~ ✅ 已完成
 11. ~~**当前目标**：Phase 2.5 - 基础 JOIN (CROSS/INNER/LEFT/RIGHT)~~ ✅ 已完成
-12. **当前目标**：Phase 3 - B+ 树存储引擎 (数据持久化)
-13. **第二个里程碑**：Phase 5 完成，能用 psql 连接
-14. **第三个里程碑**：Phase 6 完成，支持完整 ACID 事务
+12. ~~**当前目标**：Phase 3.1 - 页面管理 (PageID/PageHeader/SlottedPage)~~ ✅ 已完成
+13. ~~**当前目标**：Phase 3.2 - Buffer Pool (LRU/Pin/Unpin/PageLatch)~~ ✅ 已完成
+14. **🎉 里程碑达成**：存储引擎基础设施完成，Buffer Pool 和页面管理就绪 ✅
+15. **当前目标**：Phase 3.3 - 磁盘化查询执行 (TableIterator/增量持久化)
+16. **下一目标**：Phase 3.4 - 索引目录扩展 (IndexSchema/CREATE INDEX)
+17. **下一目标**：Phase 3.5 - B+ 树索引实现
+18. **后续目标**：Phase 7.1 - SQL 完整性补全 (子查询/约束/ALTER/VIEW)
+19. **后续目标**：Phase 7.2 - 查询优化 (Hash JOIN/索引扫描/EXPLAIN)
+20. **后续目标**：Phase 4 - WAL 基础恢复机制
+21. **第二个里程碑**：Phase 5 完成，能用 psql 连接
+22. **第三个里程碑**：Phase 6 完成，支持完整 ACID 事务
 
 ---
 
@@ -765,3 +1003,5 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 | 并发模型 | 多线程 + 连接池 | 深入理解并发控制复杂性 |
 | SQL 兼容 | PostgreSQL | 熟悉的语法，可对照验证 |
 | 测试框架 | Catch2 | DuckDB 采用，现代 C++ 风格 |
+| Phase 7 重构 (2026-03-30) | 按优先级分 4 子阶段 | 基于完整性差距分析，索引→子查询/约束→优化→高级特性 |
+| 索引优先于事务 | B+ 树先于 WAL/MVCC | 索引是约束(PK)和性能的基础，对用户体验提升最直接 |
