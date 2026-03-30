@@ -72,7 +72,76 @@ In `src/common/error.cpp`, after the `DUPLICATE_COLUMN` case (line 84), add:
         case ErrorCode::REDUNDANT_INDEX:  return "An equivalent index already exists";
 ```
 
-- [ ] **Step 4: Write the IndexSchema header**
+- [ ] **Step 4: Write failing tests for IndexSchema basics**
+
+Create `tests/unit/storage/test_index_catalog.cpp`:
+
+```cpp
+#define CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS
+#include <catch2/catch_all.hpp>
+
+#include "storage/index_schema.h"
+#include "storage/catalog.h"
+#include "storage/schema.h"
+#include "storage/row.h"
+#include "common/error.h"
+#include "common/value.h"
+
+using namespace seeddb;
+
+// =============================================================================
+// IndexSchema Tests
+// =============================================================================
+
+TEST_CASE("IndexSchema basic construction", "[index_schema]") {
+    IndexSchema idx("idx_users_name", "users",
+                    {IndexColumn("name", IndexSortDir::ASC)},
+                    false, false, IndexType::BTREE);
+
+    REQUIRE(idx.name() == "idx_users_name");
+    REQUIRE(idx.tableName() == "users");
+    REQUIRE(idx.columns().size() == 1);
+    REQUIRE(idx.columns()[0].name == "name");
+    REQUIRE(idx.columns()[0].direction == IndexSortDir::ASC);
+    REQUIRE_FALSE(idx.isUnique());
+    REQUIRE_FALSE(idx.isPrimary());
+    REQUIRE(idx.indexType() == IndexType::BTREE);
+}
+
+TEST_CASE("IndexSchema multi-column with mixed directions", "[index_schema]") {
+    IndexSchema idx("idx_multi", "orders",
+                    {IndexColumn("status", IndexSortDir::ASC),
+                     IndexColumn("created_at", IndexSortDir::DESC)},
+                    true);
+
+    REQUIRE(idx.columns().size() == 2);
+    REQUIRE(idx.columns()[0].direction == IndexSortDir::ASC);
+    REQUIRE(idx.columns()[1].direction == IndexSortDir::DESC);
+    REQUIRE(idx.isUnique());
+}
+
+TEST_CASE("IndexSchema toString", "[index_schema]") {
+    IndexSchema idx("idx_name", "users",
+                    {IndexColumn("name", IndexSortDir::ASC)},
+                    true);
+    REQUIRE(idx.toString() == "INDEX idx_name ON users (name ASC) UNIQUE");
+}
+```
+
+- [ ] **Step 5: Register test file in CMakeLists.txt**
+
+In `tests/CMakeLists.txt`, after the last test source entry (`unit/storage/test_table_iterator.cpp`), add:
+
+```
+        unit/storage/test_index_catalog.cpp
+```
+
+- [ ] **Step 6: Run tests to verify they fail**
+
+Run: `cd build && cmake .. && make -j$(nproc) 2>&1 | tail -5`
+Expected: FAIL — `index_schema.h: No such file or directory`
+
+- [ ] **Step 7: Write the IndexSchema header**
 
 Create `src/storage/index_schema.h`:
 
@@ -140,7 +209,7 @@ private:
 #endif  // SEEDDB_STORAGE_INDEX_SCHEMA_H
 ```
 
-- [ ] **Step 5: Write the IndexSchema implementation**
+- [ ] **Step 8: Write the IndexSchema implementation**
 
 Create `src/storage/index_schema.cpp`:
 
@@ -177,76 +246,12 @@ std::string IndexSchema::toString() const {
 }  // namespace seeddb
 ```
 
-- [ ] **Step 6: Write failing tests for IndexSchema basics**
-
-Create `tests/unit/storage/test_index_catalog.cpp`:
-
-```cpp
-#define CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS
-#include <catch2/catch_all.hpp>
-
-#include "storage/index_schema.h"
-#include "storage/catalog.h"
-#include "storage/schema.h"
-#include "storage/row.h"
-#include "common/error.h"
-#include "common/value.h"
-
-using namespace seeddb;
-
-// =============================================================================
-// IndexSchema Tests
-// =============================================================================
-
-TEST_CASE("IndexSchema basic construction", "[index_schema]") {
-    IndexSchema idx("idx_users_name", "users",
-                    {IndexColumn("name", IndexSortDir::ASC)},
-                    false, false, IndexType::BTREE);
-
-    REQUIRE(idx.name() == "idx_users_name");
-    REQUIRE(idx.tableName() == "users");
-    REQUIRE(idx.columns().size() == 1);
-    REQUIRE(idx.columns()[0].name == "name");
-    REQUIRE(idx.columns()[0].direction == IndexSortDir::ASC);
-    REQUIRE_FALSE(idx.isUnique());
-    REQUIRE_FALSE(idx.isPrimary());
-    REQUIRE(idx.indexType() == IndexType::BTREE);
-}
-
-TEST_CASE("IndexSchema multi-column with mixed directions", "[index_schema]") {
-    IndexSchema idx("idx_multi", "orders",
-                    {IndexColumn("status", IndexSortDir::ASC),
-                     IndexColumn("created_at", IndexSortDir::DESC)},
-                    true);
-
-    REQUIRE(idx.columns().size() == 2);
-    REQUIRE(idx.columns()[0].direction == IndexSortDir::ASC);
-    REQUIRE(idx.columns()[1].direction == IndexSortDir::DESC);
-    REQUIRE(idx.isUnique());
-}
-
-TEST_CASE("IndexSchema toString", "[index_schema]") {
-    IndexSchema idx("idx_name", "users",
-                    {IndexColumn("name", IndexSortDir::ASC)},
-                    true);
-    REQUIRE(idx.toString() == "INDEX idx_name ON users (name ASC) UNIQUE");
-}
-```
-
-- [ ] **Step 7: Register test file in CMakeLists.txt**
-
-In `tests/CMakeLists.txt`, after line 39 (`unit/storage/test_table_iterator.cpp`), add:
-
-```
-        unit/storage/test_index_catalog.cpp
-```
-
-- [ ] **Step 8: Build and run tests**
+- [ ] **Step 9: Build and run tests**
 
 Run: `cd build && cmake .. && make -j$(nproc) && ctest --output-on-failure -R index_schema`
 Expected: 3 PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/storage/index_schema.h src/storage/index_schema.cpp \
@@ -613,7 +618,7 @@ TEST_CASE("Persist and reload index", "[index_persistence]") {
             ColumnSchema("id", LogicalType(LogicalTypeId::INTEGER), false),
             ColumnSchema("name", LogicalType(LogicalTypeId::VARCHAR), true),
         }));
-        sm.onCreateTable("users", cat.getTable("users")->schema());
+        sm.onCreateTable("users", cat.getTable("users")->schema(), cat);
 
         IndexSchema idx("idx_name", "users",
                         {IndexColumn("name", IndexSortDir::ASC)}, true);
@@ -648,7 +653,7 @@ TEST_CASE("Drop index persists", "[index_persistence]") {
         cat.createTable("t", Schema({
             ColumnSchema("a", LogicalType(LogicalTypeId::INTEGER)),
         }));
-        sm.onCreateTable("t", cat.getTable("t")->schema());
+        sm.onCreateTable("t", cat.getTable("t")->schema(), cat);
 
         IndexSchema idx("idx_a", "t", {IndexColumn("a")});
         cat.createIndex(idx);
@@ -690,22 +695,18 @@ TEST_CASE("V1 format loads with empty indexes", "[index_persistence]") {
 Run: `cd build && cmake .. && make -j$(nproc) && ctest --output-on-failure -R index_persistence`
 Expected: FAIL — `onCreateIndex` not declared in StorageManager
 
-- [ ] **Step 3: Modify StorageManager header**
+- [ ] **Step 3: Apply all StorageManager + Executor changes atomically**
 
-In `src/storage/storage_manager.h`:
+> **IMPORTANT:** The following changes to storage_manager.h, storage_manager.cpp, and executor.cpp MUST all be applied together before building. Otherwise the signatures won't match and compilation will fail.
 
-1. Add include after existing includes:
+**3a. Modify `src/storage/storage_manager.h`:**
+
+Add include after existing includes:
 ```cpp
 #include "storage/index_schema.h"
 ```
 
-2. Add forward declaration for Catalog (already has it implicitly through `Catalog&` param, but add explicit):
-```cpp
-class Catalog;
-```
-Note: Catalog is already included via `storage/catalog.h`.
-
-3. Add new public methods after `onDropTable`:
+Add new public methods after `onDropTable`:
 ```cpp
     /// Persist a newly created index.
     bool onCreateIndex(const Catalog& catalog, const IndexSchema& index);
@@ -714,16 +715,24 @@ Note: Catalog is already included via `storage/catalog.h`.
     bool onDropIndex(const Catalog& catalog, const std::string& name);
 ```
 
-4. Change `saveCatalogMeta()` signature:
+Change `onCreateTable` and `onDropTable` signatures to accept `const Catalog&`:
+```cpp
+    bool onCreateTable(const std::string& name, const Schema& schema, const Catalog& catalog);
+    bool onDropTable(const std::string& name, const Catalog& catalog);
+```
+
+Change `saveCatalogMeta()` signature:
 ```cpp
     /// Serializes schemas and indexes to catalog.meta.
     bool saveCatalogMeta(const Catalog& catalog) const;
 ```
-Remove the old `const` version.
 
-- [ ] **Step 4: Implement V2 format in StorageManager**
+Add private member:
+```cpp
+    std::vector<IndexSchema> loaded_indexes_;  ///< Staging area for indexes during load
+```
 
-Replace `saveCatalogMeta()` in `src/storage/storage_manager.cpp` with V2 version that accepts Catalog&. Update the binary format comment too:
+**3b. Replace `saveCatalogMeta()` in `src/storage/storage_manager.cpp`:**
 
 ```cpp
 // ---------------------------------------------------------------------------
@@ -815,7 +824,6 @@ Update `loadCatalogMeta()` to handle V1/V2 detection:
 ```cpp
 bool StorageManager::loadCatalogMeta() {
     const std::string path = catalogMetaPath();
-    FILE* fp = std::fopen(path.c_str(), "wb");
     FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) return true;  // no catalog yet — empty database is fine
 
@@ -1258,6 +1266,8 @@ In `src/parser/parser.h`, after `parseDropTable()` declaration (line 56), add:
 
 - [ ] **Step 3: Refactor parseStatement dispatch**
 
+> **IMPORTANT:** Steps 3–6 must be applied atomically. Do not build between these steps — the new `parseStatement()` calls `parseCreateTable()` which still expects to consume CREATE. Only after Step 4 removes that consumption will the code be consistent.
+
 Replace `parseStatement()` in `src/parser/parser.cpp` (lines 67-85) with:
 
 ```cpp
@@ -1417,7 +1427,14 @@ Result<std::unique_ptr<DropIndexStmt>> Parser::parseDropIndex() {
         return syntax_error<std::unique_ptr<DropIndexStmt>>("Expected INDEX");
     }
 
-    // Optional IF EXISTS
+    // Get index name (must come before IF EXISTS per SQL spec)
+    if (!check(TokenType::IDENTIFIER)) {
+        return syntax_error<std::unique_ptr<DropIndexStmt>>("Expected index name");
+    }
+    std::string index_name = std::get<std::string>(current_token_.value);
+    consume();
+
+    // Optional IF EXISTS (after index name)
     bool if_exists = false;
     if (match(TokenType::IF)) {
         if (!match(TokenType::EXISTS)) {
@@ -1425,13 +1442,6 @@ Result<std::unique_ptr<DropIndexStmt>> Parser::parseDropIndex() {
         }
         if_exists = true;
     }
-
-    // Get index name
-    if (!check(TokenType::IDENTIFIER)) {
-        return syntax_error<std::unique_ptr<DropIndexStmt>>("Expected index name");
-    }
-    std::string index_name = std::get<std::string>(current_token_.value);
-    consume();
 
     return Result<std::unique_ptr<DropIndexStmt>>::ok(
         std::make_unique<DropIndexStmt>(std::move(index_name), if_exists));
