@@ -314,6 +314,7 @@ bool StorageManager::updateRow(TID tid, const Row& new_row, const Schema& schema
     if (page->freeSpace() + old_size >= row_size + Page::SLOT_SIZE) {
         // Safe to delete and re-insert on same page
         page->deleteRecord(tid.slot_id);
+        page->compact();  // Reclaim space from logical deletion
         auto slot = page->insertRecord(serialized.data(), row_size);
         if (slot.has_value()) {
             buffer_pool_.UnpinPage(pid, true);

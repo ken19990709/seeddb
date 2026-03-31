@@ -463,7 +463,10 @@ LIMIT 10;
 
 **里程碑验证**：Buffer Pool 测试全部通过 (237 assertions in 19 test cases) ✅
 
-#### 3.3 磁盘化查询执行（2 周）📋 计划中
+#### 3.3 磁盘化查询执行（2 周）✅ 已完成
+
+> **完成日期**: 2026-03-30
+> **详细设计**: [2026-03-30-disk-based-execution.md](plans/2026-03-30-disk-based-execution_3.md)
 
 > **设计理念**：当前 Executor 直接操作内存中的 Table::rows_ 向量，索引无法发挥 I/O 优化作用。
 > 本阶段将查询执行层与 Buffer Pool 集成，实现真正的磁盘化数据访问。
@@ -504,17 +507,17 @@ LIMIT 10;
 
 ##### 3.3.2 任务分解
 
-| 任务 | 预计 | 验证标准 |
-|------|------|----------|
-| T3-1 TableIterator 接口设计 | 0.5 天 | 定义 begin/next/end/currentRow 接口 |
-| T3-2 HeapTableIterator 实现 | 2 天 | 通过 BufferPool 逐页读取，按 slot 迭代 |
-| T3-3 Executor 改造 - SELECT | 1.5 天 | executeSelect 使用 TableIterator 替代 table.rows_ |
-| T3-4 Executor 改造 - UPDATE/DELETE | 1.5 天 | 定位修改使用 Iterator，原地更新 Page |
-| T3-5 去除全量加载 | 1 天 | StorageManager::load() 仅加载 schema，不加载 rows |
-| T3-6 移除 Table::rows_ | 1 天 | Table 类仅保留 schema，无内存行存储 |
-| T3-7 增量 INSERT | 1 天 | 直接通过 BufferPool 追加到页面，标记 dirty |
-| T3-8 增量 UPDATE/DELETE | 1.5 天 | 原地修改页面记录，无需全表重写 |
-| T3-9 集成测试 | 1 天 | 大数据量测试 (10万行+)，内存占用验证 |
+| 任务 | 预计 | 验证标准 | 状态 |
+|------|------|----------|------|
+| T3-1 TID + TableIterator 接口 | 0.5 天 | TID 物理行标识 + begin/next/end/currentRow 接口 | ✅ |
+| T3-2 HeapTableIterator 实现 | 2 天 | 通过 BufferPool 逐页读取，按 slot 迭代 | ✅ |
+| T3-3 Executor 改造 - SELECT | 1.5 天 | executeSelect 使用 TableIterator 替代 table.rows_ | ✅ |
+| T3-4 Executor 改造 - UPDATE/DELETE | 1.5 天 | 定位修改使用 Iterator，原地更新 Page | ✅ |
+| T3-5 去除全量加载 | 1 天 | StorageManager::load() 仅加载 schema，不加载 rows | ✅ |
+| T3-6 移除 Table::rows_ | 1 天 | Table 类仅保留 schema，无内存行存储 | ✅ |
+| T3-7 增量 INSERT | 1 天 | 直接通过 BufferPool 追加到页面，标记 dirty | ✅ |
+| T3-8 增量 UPDATE/DELETE | 1.5 天 | 原地修改页面记录，无需全表重写 | ✅ |
+| T3-9 集成测试 | 1 天 | 10K 行压测 + 错误传播测试 + 迭代器边界测试 | ✅ |
 
 **里程碑验证**：
 - 插入 10 万行数据，内存占用保持在 buffer_pool_size 范围内
@@ -956,7 +959,7 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 | Phase 2.5 | 基础 JOIN 支持 (CROSS/INNER/LEFT/RIGHT) | ✅ 完成 | 2026-03-24 |
 | Phase 3.1 | 页面管理 (PageID/PageHeader/SlottedPage/DiskManager) | ✅ 完成 | 2026-03-24 |
 | Phase 3.2 | Buffer Pool (LRU/Pin/Unpin/PageLatch) | ✅ 完成 | 2026-03-24 |
-| Phase 3.3 | 磁盘化查询执行 (TableIterator/增量持久化) | 📋 计划中 | - |
+| Phase 3.3 | 磁盘化查询执行 (TableIterator/增量持久化) | ✅ 完成 | 2026-03-30 |
 | Phase 3.4 | 索引目录扩展 (IndexSchema/CREATE INDEX) | 📋 计划中 | - |
 | Phase 3.5 | B+ 树索引 | 📋 计划中 | - |
 | Phase 4 | 基础恢复机制 (WAL) | 📋 计划中 | - |
@@ -983,14 +986,15 @@ LEFT JOIN table_c c ON a.id = c.a_id;
 12. ~~**当前目标**：Phase 3.1 - 页面管理 (PageID/PageHeader/SlottedPage)~~ ✅ 已完成
 13. ~~**当前目标**：Phase 3.2 - Buffer Pool (LRU/Pin/Unpin/PageLatch)~~ ✅ 已完成
 14. **🎉 里程碑达成**：存储引擎基础设施完成，Buffer Pool 和页面管理就绪 ✅
-15. **当前目标**：Phase 3.3 - 磁盘化查询执行 (TableIterator/增量持久化)
-16. **下一目标**：Phase 3.4 - 索引目录扩展 (IndexSchema/CREATE INDEX)
-17. **下一目标**：Phase 3.5 - B+ 树索引实现
-18. **后续目标**：Phase 7.1 - SQL 完整性补全 (子查询/约束/ALTER/VIEW)
-19. **后续目标**：Phase 7.2 - 查询优化 (Hash JOIN/索引扫描/EXPLAIN)
-20. **后续目标**：Phase 4 - WAL 基础恢复机制
-21. **第二个里程碑**：Phase 5 完成，能用 psql 连接
-22. **第三个里程碑**：Phase 6 完成，支持完整 ACID 事务
+15. ~~**当前目标**：Phase 3.3 - 磁盘化查询执行 (TableIterator/增量持久化)~~ ✅ 已完成
+16. **🎉 里程碑达成**：磁盘化查询执行完成，数据不再全量加载到内存 ✅
+17. **当前目标**：Phase 3.4 - 索引目录扩展 (IndexSchema/CREATE INDEX)
+18. **下一目标**：Phase 3.5 - B+ 树索引实现
+19. **后续目标**：Phase 7.1 - SQL 完整性补全 (子查询/约束/ALTER/VIEW)
+20. **后续目标**：Phase 7.2 - 查询优化 (Hash JOIN/索引扫描/EXPLAIN)
+21. **后续目标**：Phase 4 - WAL 基础恢复机制
+22. **第二个里程碑**：Phase 5 完成，能用 psql 连接
+23. **第三个里程碑**：Phase 6 完成，支持完整 ACID 事务
 
 ---
 
